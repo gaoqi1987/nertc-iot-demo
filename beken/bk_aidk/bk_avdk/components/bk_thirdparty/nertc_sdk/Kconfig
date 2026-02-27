@@ -1,0 +1,9 @@
+menu "Bk_thirdparty::nertc_sdk"
+
+	config NERTC_SDK
+		bool "Enable nertc sdk"
+		default n
+		help
+			Enable nertc sdk lib
+
+endmenu
