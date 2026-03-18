@@ -15,9 +15,7 @@ HttpClient::HttpClient(NetworkInterface* network, int connect_id) : network_(net
 }
 
 HttpClient::~HttpClient() {
-    if (connected_) {
-        Close();
-    }
+    Close();
     vEventGroupDelete(event_group_handle_);
 }
 
@@ -191,6 +189,12 @@ bool HttpClient::Open(const std::string& method, const std::string& url) {
             tcp_->Disconnect();
             connected_ = false;
         }
+
+        // 清除旧 tcp_ 的回调，防止旧 ReceiveTask 延迟退出时触发回调并与新连接产生锁竞争
+        if (tcp_) {
+            tcp_->OnStream(nullptr);
+            tcp_->OnDisconnected(nullptr);
+        }
         
         // 重置所有状态（不会清空 content_）
         ResetRequestState();
@@ -241,14 +245,16 @@ bool HttpClient::Open(const std::string& method, const std::string& url) {
 }
 
 void HttpClient::Close() {
-    if (!connected_) {
-        return;
-    }
-
     connected_ = false;
-    server_keep_alive_ = false;  // 重置 Keep-Alive 标志
+    server_keep_alive_ = false;
     write_cv_.notify_all();
-    tcp_->Disconnect();
+
+    // 始终调用 tcp_->Disconnect()，确保 ReceiveTask 完全退出
+    // 即使 connected_ 已被 OnTcpDisconnected 回调设为 false，
+    // 仍需等待 ReceiveTask 退出，否则对象销毁后 ReceiveTask 访问已释放内存
+    if (tcp_) {
+        tcp_->Disconnect();
+    }
 
     eof_ = true;
     cv_.notify_all();
@@ -256,8 +262,6 @@ void HttpClient::Close() {
 }
 
 void HttpClient::OnTcpData(const std::string& data) {
-    std::lock_guard<std::mutex> lock(mutex_);
-
     // 检查 body_chunks_ 大小，如果超过 8KB
     {
         std::unique_lock<std::mutex> read_lock(read_mutex_);
@@ -270,6 +274,7 @@ void HttpClient::OnTcpData(const std::string& data) {
         });
     }
 
+    std::lock_guard<std::mutex> lock(mutex_);
     rx_buffer_.append(data);
     ProcessReceivedData();
     cv_.notify_one();
@@ -727,7 +732,7 @@ void HttpClient::AddBodyData(std::string&& data) {
 }
 
 std::string HttpClient::ReadAll() {
-    std::unique_lock<std::mutex> lock(mutex_);
+    std::unique_lock<std::mutex> lock(read_mutex_);
 
     // 等待完成或出错
     auto timeout = std::chrono::milliseconds(timeout_ms_);
@@ -748,7 +753,6 @@ std::string HttpClient::ReadAll() {
 
     // 收集所有数据
     std::string result;
-    std::lock_guard<std::mutex> read_lock(read_mutex_);
     for (const auto& chunk : body_chunks_) {
         result.append(chunk.data);
     }

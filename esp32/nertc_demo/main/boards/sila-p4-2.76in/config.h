@@ -1,0 +1,62 @@
+#ifndef _BOARD_CONFIG_H_
+#define _BOARD_CONFIG_H_
+
+#include <driver/gpio.h>
+
+#define AUDIO_INPUT_SAMPLE_RATE  24000
+#define AUDIO_OUTPUT_SAMPLE_RATE 24000
+
+#define AUDIO_INPUT_REFERENCE    true
+
+#define AUDIO_I2S_GPIO_MCLK GPIO_NUM_13
+#define AUDIO_I2S_GPIO_WS GPIO_NUM_10
+#define AUDIO_I2S_GPIO_BCLK GPIO_NUM_12
+#define AUDIO_I2S_GPIO_DIN  GPIO_NUM_11
+#define AUDIO_I2S_GPIO_DOUT GPIO_NUM_9
+
+// #define AUDIO_CODEC_PA_PIN       GPIO_NUM_21 //R0版本
+#define AUDIO_CODEC_PA_PIN       GPIO_NUM_20 //R1版本
+#define AUDIO_CODEC_I2C_SDA_PIN  GPIO_NUM_7
+#define AUDIO_CODEC_I2C_SCL_PIN  GPIO_NUM_8
+#define AUDIO_CODEC_ES8311_ADDR  ES8311_CODEC_DEFAULT_ADDR
+#define AUDIO_CODEC_ES7210_ADDR  ES7210_CODEC_DEFAULT_ADDR
+
+#define BOOT_BUTTON_GPIO        GPIO_NUM_47
+
+#define DISPLAY_WIDTH 480
+#define DISPLAY_HEIGHT 480
+
+#define LCD_BIT_PER_PIXEL          (16)
+#define PIN_NUM_LCD_RST            GPIO_NUM_24
+
+#define DELAY_TIME_MS                      (3000)
+#define LCD_MIPI_DSI_LANE_NUM          (2)    // 2 data lanes
+
+#define MIPI_DSI_PHY_PWR_LDO_CHAN          (3)
+#define MIPI_DSI_PHY_PWR_LDO_VOLTAGE_MV    (2500)
+
+#define DISPLAY_SWAP_XY false
+#define DISPLAY_MIRROR_X false
+#define DISPLAY_MIRROR_Y false
+
+#define DISPLAY_OFFSET_X  0
+#define DISPLAY_OFFSET_Y  0
+
+#define DISPLAY_BACKLIGHT_PIN GPIO_NUM_27
+#define DISPLAY_BACKLIGHT_OUTPUT_INVERT true
+
+#define SD_MOUNT_POINT "/sdcard"
+#define SD_SDMMC_CLK_PIN   43   // SDMMC_SCK
+#define SD_SDMMC_CMD_PIN   44   // SDMMC_CMD  
+#define SD_SDMMC_D0_PIN    39   // SDMMC_D0
+#define SD_SDMMC_D1_PIN    40   // SDMMC_D1
+#define SD_SDMMC_D2_PIN    41   // SDMMC_D2
+#define SD_SDMMC_D3_PIN    42   // SDMMC_D3
+
+// 触摸配置
+#define TP_I2C_SDA_PIN     GPIO_NUM_7   
+#define TP_I2C_SCL_PIN     GPIO_NUM_8  
+#define TP_INT_PIN         GPIO_NUM_25 // 触摸中断引脚
+#define TP_RST_PIN         GPIO_NUM_26 // 触摸复位引脚
+
+#endif // _BOARD_CONFIG_H_

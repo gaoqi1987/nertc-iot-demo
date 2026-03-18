@@ -1,17 +1,30 @@
 #ifndef MUSIC_PLAYER_H
 #define MUSIC_PLAYER_H 
-#include "music_player_api.h"
 #include "audio/audio_codec.h"
 #include "audio/audio_service.h"
 #include <string>
 #include <vector>
 #include "esp_log.h"
 #include "mp3_online_player.h"
+struct MusicProgress {
+    unsigned int duration_ms;
+    unsigned int position_ms;
+};
+
 struct MusicInfo {
     std::string name;
     std::string uri;
     std::string album;
     std::string artist;
+};
+
+struct MusicPlayingInfo {
+    std::string name;           // 歌曲名称
+    std::string album;          // 专辑名称
+    std::string artist;         // 艺术家
+    std::string uri;            // 播放地址
+    unsigned int duration_ms;   // 歌曲总时长 (ms)，基于码率估算
+    unsigned int position_ms;   // 当前播放进度 (ms)
 };
 
 class MusicListManager {
@@ -195,9 +208,9 @@ public:
     void StopAirPlay(){
         mp3_online_player_.StopStreaming();
     }
-    void StopPlay() {
-        mp3_player_stop();
-    }
+    // void StopPlay() {
+    //     mp3_player_stop();
+    // }
 
     bool CurrentPlayingLastMusic(){
         return music_list_manager_.CurrentLastMusicOnList(is_air_music_playing_);
@@ -206,15 +219,18 @@ public:
     int DataCallback(uint8_t *data, int data_size);
     void InfoCallback(int sample_rate, int channels, int bits);
     void PlayStateCallback(music_player_state_t state);
+    MusicProgress GetProgress();
+    MusicPlayingInfo GetCurrentMusicPlayingInfo();
+    music_player_state_t GetPlayerState() const { return current_state_; }
     void InterruptPlay(){
         if(!initialed){
             return;
         }
         StopAirPlay();
-        if(current_state_ == music_player_state_t::MUSIC_PLAYER_STATE_PLAYING){
-            ESP_LOGI("MusicPlayer", "InterruptPlay: stopping current music playback");
-            StopPlay();
-        }
+        // if(current_state_ == music_player_state_t::MUSIC_PLAYER_STATE_PLAYING){
+        //     ESP_LOGI("MusicPlayer", "InterruptPlay: stopping current music playback");
+        //     StopPlay();
+        // }
     }
 private:
     MusicPlayer();

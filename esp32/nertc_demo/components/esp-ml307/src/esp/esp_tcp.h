@@ -6,6 +6,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/event_groups.h>
 #include <freertos/task.h>
+#include <atomic>
 
 #define ESP_TCP_EVENT_RECEIVE_TASK_EXIT 1
 
@@ -25,6 +26,7 @@ private:
     EventGroupHandle_t event_group_ = nullptr;
     TaskHandle_t receive_task_handle_ = nullptr;
     int last_error_ = 0;
+    std::atomic<bool> callback_called_{false};
 
     void ReceiveTask();
     // 内部断开处理函数

@@ -12,10 +12,6 @@ struct AudioStreamPacket {
     int frame_duration = 0;
     uint32_t timestamp = 0;
     std::vector<uint8_t> payload;
-#if CONFIG_CONNECTION_TYPE_NERTC
-    bool muted = false;
-    std::vector<int16_t> pcm_payload;
-#endif
 };
 
 struct BinaryProtocol2 {
@@ -74,7 +70,7 @@ public:
 
     virtual bool Start() = 0;
     virtual bool OpenAudioChannel() = 0;
-    virtual void CloseAudioChannel() = 0;
+    virtual void CloseAudioChannel(bool send_goodbye = true) = 0;
     virtual bool IsAudioChannelOpened() const = 0;
     virtual bool SendAudio(std::unique_ptr<AudioStreamPacket> packet) = 0;
     virtual void SendAecReferenceAudio(std::unique_ptr<AudioStreamPacket> packet) {}
@@ -114,3 +110,4 @@ protected:
 };
 
 #endif // PROTOCOL_H
+

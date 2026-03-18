@@ -73,12 +73,17 @@ def main():
     parser.add_argument("-i", "--input", default="", help="Input directory for building or bin file for flashing.")
     parser.add_argument("--size", help="Specify the size for the bin file (e.g., 0x2000).")
     parser.add_argument("--write-at", help="Specify the flash write address (e.g., 0x36100).")
-    parser.add_argument("--target", default=DEFAULT_TARGET, help="Specify the target chip (e.g., esp32, esp32-s3, esp32-c3). Default is esp32-s3.")
+    parser.add_argument("--target", default=DEFAULT_TARGET, help="Specify the target chip (e.g., esp32, esp32-s3, esp32-c3, esp32-p4). Default is esp32-s3.")
     parser.add_argument("--blufi", action="store_true", help="Flash the blufi firmware for Bluetooth provisioning.")
     args = parser.parse_args()
 
     # 根据target选择分区表文件
-    partition_table_path = DEFAULT_C3_PARTITION_TABLE if args.target == "esp32-c3" else DEFAULT_PARTITION_TABLE
+    if args.target == "esp32-c3":
+        partition_table_path = DEFAULT_C3_PARTITION_TABLE
+    elif args.target == "esp32-p4":
+        partition_table_path = DEFAULT_PARTITION_TABLE
+    else:
+        partition_table_path = DEFAULT_PARTITION_TABLE
 
     # 如果没有指定 --size 或 --write-at，从分区表中解析
     size = args.size
@@ -98,6 +103,8 @@ def main():
                 os.makedirs("local_config")
 
             if args.target == "esp32-s3":
+                shutil.copy("create_local_config/config.json.s3", "local_config/config.json")
+            elif args.target == "esp32-p4":
                 shutil.copy("create_local_config/config.json.s3", "local_config/config.json")
             else:  # esp32-c3 or other targets
                 shutil.copy("create_local_config/config.json.c3", "local_config/config.json")

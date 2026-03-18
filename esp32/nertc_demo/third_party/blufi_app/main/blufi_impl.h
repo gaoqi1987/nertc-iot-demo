@@ -22,7 +22,7 @@
 #include "esp_blufi.h"
 #include "blufi_wifi.h"
 
-#define BLUFI_CONFIG_TAG "BLUFI_CONFIG_WIFI"
+#define BLUFI_CONFIG_TAG "BLUFI"
 #define BLUFI_INFO(fmt, ...)   ESP_LOGI(BLUFI_CONFIG_TAG, fmt, ##__VA_ARGS__)
 #define BLUFI_ERROR(fmt, ...)  ESP_LOGE(BLUFI_CONFIG_TAG, fmt, ##__VA_ARGS__)
 
@@ -38,6 +38,8 @@ typedef struct {
     esp_blufi_extra_info_t sta_conn_info;
     char prefix[26];
     char device_name[32];
+    uint8_t device_info[300];
+    int device_info_len;
     wifi_config_t sta_config;
     wifi_config_t ap_config;
     uint8_t wifi_retry;

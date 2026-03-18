@@ -187,7 +187,7 @@ void PureAfeAudioProcessor::InputReferenceAudio(const std::vector<int16_t>& data
     //printf("input reference audio size: %d, feed size: %d\n", data.size(), GetFeedSize());
     reference_buffer_.insert(reference_buffer_.end(), data.begin(), data.end());
     if(reference_buffer_.size() > codec_->output_sample_rate() * 2) {
-        ESP_LOGW(TAG, "reference buffer overflow before feed, drop data");
+        //ESP_LOGW(TAG, "reference buffer overflow before feed, drop data");
         reference_buffer_.clear();
     }
 }

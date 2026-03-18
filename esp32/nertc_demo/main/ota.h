@@ -21,7 +21,7 @@ public:
     bool HasActivationCode() { return has_activation_code_; }
     bool HasServerTime() { return has_server_time_; }
     bool StartUpgrade(std::function<void(int progress, size_t speed)> callback);
-    bool StartUpgradeFromUrl(const std::string& url, std::function<void(int progress, size_t speed)> callback);
+    static bool Upgrade(const std::string& firmware_url, std::function<void(int progress, size_t speed)> callback);
     void MarkCurrentVersionValid();
 
     const std::string& GetFirmwareVersion() const { return firmware_version_; }
@@ -53,7 +53,6 @@ private:
     int agent_interrupt_mode_ = -1; //0:不打断，1:开始说话打断，2:结束说话打断, 3:打断词打断
     bool support_air_music_player = false;
     bool support_air_music_in_4G = false;
-    bool Upgrade(const std::string& firmware_url);
     std::function<void(int progress, size_t speed)> upgrade_callback_;
     std::vector<int> ParseVersion(const std::string& version);
     bool IsNewVersionAvailable(const std::string& currentVersion, const std::string& newVersion);

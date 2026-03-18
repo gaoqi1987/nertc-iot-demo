@@ -24,7 +24,8 @@
 Mp3OnlinePlayer::Mp3OnlinePlayer() : is_playing_(false), is_downloading_(false),
                            play_thread_(), download_thread_(), audio_buffer_(), buffer_mutex_(),
                            buffer_cv_(), buffer_size_(0), mp3_decoder_(nullptr), mp3_frame_info_(),
-                           mp3_decoder_initialized_(false)
+                           mp3_decoder_initialized_(false),
+                           position_ms_(0), duration_ms_(0), content_length_bytes_(0)
 {
     ESP_LOGI(TAG, "Music player initialized with default spectrum display mode");
     InitializeMp3Decoder();
@@ -153,6 +154,20 @@ void Mp3OnlinePlayer::Mp3OnlinePlayerInit(mp3_player_output_cb_t output_cb, mp3_
 }
 
 
+
+unsigned int Mp3OnlinePlayer::GetPositionMs() const
+{
+    if (!is_playing_) return 0;
+    int64_t pos = position_ms_.load();
+    if (duration_ms_ > 0 && pos > duration_ms_) pos = duration_ms_;
+    return static_cast<unsigned int>(pos);
+}
+
+unsigned int Mp3OnlinePlayer::GetDurationMs() const
+{
+    return static_cast<unsigned int>(duration_ms_);
+}
+
 // 开始流式播放
 bool Mp3OnlinePlayer::StartStreaming(const std::string &music_url)
 {
@@ -201,7 +216,7 @@ bool Mp3OnlinePlayer::StartStreaming(const std::string &music_url)
     // 配置线程栈大小以避免栈溢出
     esp_pthread_cfg_t cfg = esp_pthread_get_default_config();
     cfg.stack_size = 8192; // 8KB栈大小
-    cfg.prio = 16;          // 中等优先级
+    cfg.prio = 16;          // 中等优先级，确保不会被其他高优先级任务频繁抢占导致调度问题
     cfg.thread_name = "audio_stream";
     cfg.stack_alloc_caps = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;
     esp_pthread_set_cfg(&cfg);
@@ -302,6 +317,102 @@ bool Mp3OnlinePlayer::StopStreaming()
     return true;
 }
 
+// 从 Content-Range 头解析总大小
+// 格式: "bytes 0-262143/12345678"
+int64_t Mp3OnlinePlayer::ParseContentRangeTotal(const std::string& content_range) {
+    auto pos = content_range.find('/');
+    if (pos == std::string::npos) return -1;
+    std::string total_str = content_range.substr(pos + 1);
+    if (total_str == "*") return -1;  // 未知大小
+    return std::stoll(total_str);
+}
+
+// 分片 Range 下载后续数据（复用调用方的栈 buffer，避免栈溢出）
+void Mp3OnlinePlayer::DownloadWithRange(const std::string& music_url, size_t total_size, char* buffer, size_t buffer_len) {
+    size_t current_offset = RANGE_CHUNK_SIZE;  // 首片已在 DownloadAudioStream 中读取
+
+    while (is_downloading_ && is_playing_ && current_offset < total_size) {
+        // 等待 buffer 消耗到低水位再下载下一片
+        {
+            std::unique_lock<std::mutex> lock(buffer_mutex_);
+            buffer_cv_.wait(lock, [this] {
+                return buffer_size_ < BUFFER_LOW_THRESHOLD || !is_downloading_;
+            });
+            if (!is_downloading_) break;
+        }
+
+        // 计算本片范围
+        size_t range_end = std::min(current_offset + RANGE_CHUNK_SIZE - 1, total_size - 1);
+
+        // 创建新 HTTP 请求
+        auto network = Board::GetInstance().GetNetwork();
+        auto http = network->CreateHttp(0);
+
+        std::ostringstream range_header;
+        range_header << "bytes=" << current_offset << "-" << range_end;
+        http->SetHeader("Range", range_header.str());
+
+        if (!http->Open("GET", music_url)) {
+            ESP_LOGE(TAG, "Range request failed to connect, offset=%d", (int)current_offset);
+            break;
+        }
+
+        int status_code = http->GetStatusCode();
+        if (status_code != 206) {
+            ESP_LOGW(TAG, "Range request returned %d (expected 206), stopping range download", status_code);
+            http->Close();
+            break;
+        }
+
+        ESP_LOGI(TAG, "Range chunk: bytes %d-%d/%d", (int)current_offset, (int)range_end, (int)total_size);
+
+        // 读取本片数据 (4KB 循环)
+        while (is_downloading_ && is_playing_) {
+            int bytes_read = http->Read(buffer, buffer_len);
+            if (bytes_read < 0) {
+                ESP_LOGE(TAG, "Range read error: %d", bytes_read);
+                break;
+            }
+            if (bytes_read == 0) break;
+
+            uint8_t *chunk_data = (uint8_t *)heap_caps_malloc(bytes_read, MALLOC_CAP_SPIRAM);
+            if (!chunk_data) {
+                ESP_LOGE(TAG, "Failed to allocate memory for range chunk");
+                break;
+            }
+            memcpy(chunk_data, buffer, bytes_read);
+
+            // 等待缓冲区有空间
+            {
+                std::unique_lock<std::mutex> lock(buffer_mutex_);
+                buffer_cv_.wait(lock, [this] {
+                    return buffer_size_ < MAX_BUFFER_SIZE || !is_downloading_;
+                });
+
+                if (is_downloading_) {
+                    audio_buffer_.push(AudioChunk(chunk_data, bytes_read));
+                    buffer_size_ += bytes_read;
+                    buffer_cv_.notify_one();
+                } else {
+                    heap_caps_free(chunk_data);
+                    break;
+                }
+            }
+        }
+
+        http->Close();
+        current_offset = range_end + 1;
+    }
+
+    is_downloading_ = false;
+    // 通知播放线程下载完成
+    {
+        std::lock_guard<std::mutex> lock(buffer_mutex_);
+        buffer_cv_.notify_all();
+    }
+    ESP_LOGI(TAG, "Range download finished, total_size=%d", (int)total_size);
+}
+
 // 流式下载音频数据
 void Mp3OnlinePlayer::DownloadAudioStream(const std::string &music_url)
 {
@@ -318,6 +429,14 @@ void Mp3OnlinePlayer::DownloadAudioStream(const std::string &music_url)
     auto network = Board::GetInstance().GetNetwork();
     auto http = network->CreateHttp(0);
 
+    // 携带 Range 头探测服务器是否支持分片下载
+    bool use_range = false;
+    if (!force_no_range_) {
+        std::ostringstream first_range;
+        first_range << "bytes=0-" << (RANGE_CHUNK_SIZE - 1);
+        http->SetHeader("Range", first_range.str());
+    }
+
     if (!http->Open("GET", music_url))
     {
         ESP_LOGE(TAG, "Failed to connect to music stream URL");
@@ -327,7 +446,7 @@ void Mp3OnlinePlayer::DownloadAudioStream(const std::string &music_url)
 
     int status_code = http->GetStatusCode();
     if (status_code != 200 && status_code != 206)
-    { // 206 for partial content
+    {
         ESP_LOGE(TAG, "HTTP GET failed with status code: %d", status_code);
         http->Close();
         is_downloading_ = false;
@@ -336,8 +455,36 @@ void Mp3OnlinePlayer::DownloadAudioStream(const std::string &music_url)
 
     ESP_LOGI(TAG, "Started downloading audio stream, status: %d", status_code);
 
-    // 分块读取音频数据
-    const size_t chunk_size = 4096;; // 4KB每块
+    // 解析总大小
+    content_length_bytes_ = 0;
+    size_t total_file_size = 0;
+
+    if (status_code == 206) {
+        // 服务器支持 Range，从 Content-Range 解析总大小
+        std::string content_range = http->GetResponseHeader("Content-Range");
+        ESP_LOGI(TAG, "Content-Range: %s", content_range.c_str());
+        int64_t parsed_total = ParseContentRangeTotal(content_range);
+        if (parsed_total > 0) {
+            total_file_size = static_cast<size_t>(parsed_total);
+            content_length_bytes_ = parsed_total;
+            use_range = true;
+            ESP_LOGI(TAG, "Range supported, total file size: %d bytes", (int)total_file_size);
+        } else {
+            ESP_LOGW(TAG, "Failed to parse Content-Range, falling back to streaming");
+        }
+    }
+
+    if (!use_range) {
+        // 不支持 Range（返回 200）或解析失败，使用 Content-Length
+        size_t body_len = http->GetBodyLength();
+        if (body_len > 0) {
+            content_length_bytes_ = static_cast<int64_t>(body_len);
+            ESP_LOGI(TAG, "Content-Length: %d bytes", (int)content_length_bytes_);
+        }
+    }
+
+    // 读取首片（或全部）数据
+    const size_t chunk_size = 4096;
     char buffer[chunk_size];
     size_t total_downloaded = 0;
 
@@ -351,25 +498,12 @@ void Mp3OnlinePlayer::DownloadAudioStream(const std::string &music_url)
         }
         if (bytes_read == 0)
         {
-            ESP_LOGI(TAG, "Audio stream download completed, total: %d bytes", total_downloaded);
+            if (use_range) {
+                ESP_LOGI(TAG, "First range chunk downloaded, total: %d bytes", (int)total_downloaded);
+            } else {
+                ESP_LOGI(TAG, "Audio stream download completed, total: %d bytes", (int)total_downloaded);
+            }
             break;
-        }
-
-        // 打印数据块信息
-        // ESP_LOGI(TAG, "Downloaded chunk: %d bytes at offset %d", bytes_read, total_downloaded);
-
-        // 安全地打印数据块的十六进制内容（前16字节）
-        if (bytes_read >= 16)
-        {
-            // ESP_LOGI(TAG, "Data: %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X ...",
-            //         (unsigned char)buffer[0], (unsigned char)buffer[1], (unsigned char)buffer[2], (unsigned char)buffer[3],
-            //         (unsigned char)buffer[4], (unsigned char)buffer[5], (unsigned char)buffer[6], (unsigned char)buffer[7],
-            //         (unsigned char)buffer[8], (unsigned char)buffer[9], (unsigned char)buffer[10], (unsigned char)buffer[11],
-            //         (unsigned char)buffer[12], (unsigned char)buffer[13], (unsigned char)buffer[14], (unsigned char)buffer[15]);
-        }
-        else
-        {
-            ESP_LOGI(TAG, "Data chunk too small: %d bytes", bytes_read);
         }
 
         // 尝试检测文件格式（检查文件头）
@@ -429,7 +563,7 @@ void Mp3OnlinePlayer::DownloadAudioStream(const std::string &music_url)
 
                 if (total_downloaded % (256 * 1024) == 0)
                 { // 每256KB打印一次进度
-                    ESP_LOGI(TAG, "Downloaded %d bytes, buffer size: %d", total_downloaded, buffer_size_);
+                    ESP_LOGI(TAG, "Downloaded %d bytes, buffer size: %d", (int)total_downloaded, (int)buffer_size_);
                 }
             }
             else
@@ -438,9 +572,21 @@ void Mp3OnlinePlayer::DownloadAudioStream(const std::string &music_url)
                 break;
             }
         }
+
+        // 非 Range 模式节流：避免连续高速下载挤占 WiFi 带宽
+        if (!use_range) {
+            vTaskDelay(pdMS_TO_TICKS(20));
+        }
     }
 
     http->Close();
+
+    // Range 模式：首片读完后继续分片下载后续数据
+    if (use_range && is_downloading_ && is_playing_ && total_file_size > RANGE_CHUNK_SIZE) {
+        DownloadWithRange(music_url, total_file_size, buffer, chunk_size);
+        return;  // DownloadWithRange 内部已处理 is_downloading_ 和通知
+    }
+
     is_downloading_ = false;
 
     // 通知播放线程下载完成
@@ -458,10 +604,9 @@ void Mp3OnlinePlayer::PlayAudioStream()
     ESP_LOGI(TAG, "Starting audio stream playback");
 
     // 初始化时间跟踪变量
-    current_play_time_ms_ = 0;
-    last_frame_time_ms_ = 0;
     total_frames_decoded_ = 0;
-
+    duration_ms_ = 0;
+    position_ms_ = 0;
     if (!mp3_decoder_initialized_)
     {
         ESP_LOGE(TAG, "MP3 decoder not initialized");
@@ -594,6 +739,11 @@ void Mp3OnlinePlayer::PlayAudioStream()
         {
             // 解码成功，获取帧信息
             MP3GetLastFrameInfo(mp3_decoder_, &mp3_frame_info_);
+            if(duration_ms_ == 0 && mp3_frame_info_.bitrate > 0 && content_length_bytes_ > 0){
+                // 估算总时长
+                duration_ms_ = (content_length_bytes_ * 8 * 1000) / (mp3_frame_info_.bitrate) - 2000; // 减去2秒的预估开头和结尾误差
+                ESP_LOGI(TAG, "Estimated total duration: %d ms", (int)duration_ms_);
+            }
             total_frames_decoded_++;
 
             // 基本的帧信息有效性检查，防止除零错误
@@ -613,17 +763,15 @@ void Mp3OnlinePlayer::PlayAudioStream()
                                     (mp3_frame_info_.samprate * mp3_frame_info_.nChans);
 
             // 更新当前播放时间
-            current_play_time_ms_ += frame_duration_ms;
+            position_ms_ += frame_duration_ms;
 
-            ESP_LOGD(TAG, "Frame %d: time=%lldms, duration=%dms, rate=%d, ch=%d",
-                     total_frames_decoded_, current_play_time_ms_, frame_duration_ms,
-                     mp3_frame_info_.samprate, mp3_frame_info_.nChans);
             // 播放to do
             output_cb_((uint8_t*)pcm_buffer, 2 * mp3_frame_info_.outputSamps, user_context_);
             if(player_state_ != music_player_state_t::MUSIC_PLAYER_STATE_PLAYING){
                 player_state_ = music_player_state_t::MUSIC_PLAYER_STATE_PLAYING;
                 event_cb_(music_player_state_t::MUSIC_PLAYER_STATE_PLAYING, user_context_);
             }
+            taskYIELD();  // 主动让出 CPU，给同优先级或更高优先级任务运行机会
         }
         else
         {

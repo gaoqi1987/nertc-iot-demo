@@ -122,8 +122,17 @@ public:
     }
 
     std::string to_json() const {
+        cJSON *json = to_cjson();
+        char *json_str = cJSON_PrintUnformatted(json);
+        std::string result(json_str);
+        cJSON_free(json_str);
+        cJSON_Delete(json);
+        return result;
+    }
+
+    cJSON* to_cjson() const {
         cJSON *json = cJSON_CreateObject();
-        
+
         if (type_ == kPropertyTypeBoolean) {
             cJSON_AddStringToObject(json, "type", "boolean");
             if (has_default_value_) {
@@ -161,7 +170,7 @@ public:
             if (has_default_value_) {
                 parts.push_back("default " + std::to_string(value<int>()));
             }
-            
+
             if (!parts.empty()) {
                 description += " with ";
                 for (size_t i = 0; i < parts.size(); ++i) {
@@ -188,13 +197,8 @@ public:
             }
             cJSON_AddStringToObject(json, "description", description.c_str());
         }
-        
-        char *json_str = cJSON_PrintUnformatted(json);
-        std::string result(json_str);
-        cJSON_free(json_str);
-        cJSON_Delete(json);
-        
-        return result;
+
+        return json;
     }
 };
 
@@ -232,19 +236,20 @@ public:
     }
 
     std::string to_json() const {
-        cJSON *json = cJSON_CreateObject();
-        
-        for (const auto& property : properties_) {
-            cJSON *prop_json = cJSON_Parse(property.to_json().c_str());
-            cJSON_AddItemToObject(json, property.name().c_str(), prop_json);
-        }
-        
+        cJSON *json = to_cjson();
         char *json_str = cJSON_PrintUnformatted(json);
         std::string result(json_str);
         cJSON_free(json_str);
         cJSON_Delete(json);
-        
         return result;
+    }
+
+    cJSON* to_cjson() const {
+        cJSON *json = cJSON_CreateObject();
+        for (const auto& property : properties_) {
+            cJSON_AddItemToObject(json, property.name().c_str(), property.to_cjson());
+        }
+        return json;
     }
 };
 
@@ -282,7 +287,7 @@ public:
         cJSON *input_schema = cJSON_CreateObject();
         cJSON_AddStringToObject(input_schema, "type", "object");
         
-        cJSON *properties = cJSON_Parse(properties_.to_json().c_str());
+        cJSON *properties = properties_.to_cjson();
         cJSON_AddItemToObject(input_schema, "properties", properties);
         
         if (!required.empty()) {

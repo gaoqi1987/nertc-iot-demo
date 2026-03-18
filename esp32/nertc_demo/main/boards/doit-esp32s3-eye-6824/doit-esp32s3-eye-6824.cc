@@ -5,11 +5,9 @@
 #include "application.h"
 #include "button.h"
 #include "config.h"
-#include "iot/thing_manager.h"
 #include "led/single_led.h"
 #include "power_save_timer.h"
 
-#include <wifi_station.h>
 #include <esp_log.h>
 #include <driver/i2c_master.h>
 #include <esp_lcd_panel_vendor.h>
@@ -26,7 +24,6 @@
 #include "touch_button.h"
 #endif
 #include "assets/lang_config.h"
-#include <ssid_manager.h>
 
 #define TAG "CompactWifiBoardLCD"
 
@@ -91,15 +88,15 @@ private:
             // 获取应用程序实例
             auto& app = Application::GetInstance();
             // 如果设备状态为kDeviceStateStarting且WifiStation未连接，则重置Wifi配置
-            if (app.GetDeviceState() == kDeviceStateStarting && !WifiStation::GetInstance().IsConnected()) {
-                ResetWifiConfiguration();
+            if (app.GetDeviceState() == kDeviceStateStarting ) {
+                EnterWifiConfigMode();
             }
             // 切换聊天状态
             app.ToggleChatState(); });
 
         boot_button_.OnMultipleClick([this]()
             {
-                ResetWifiConfiguration();
+                EnterWifiConfigMode();
             });
 #if (defined(CONFIG_VB6824_OTA_SUPPORT) && CONFIG_VB6824_OTA_SUPPORT == 1)
         boot_button_.OnDoubleClick([this]()
@@ -182,59 +179,6 @@ private:
         display_->SetEmotion("wifi");
     }
 
-    virtual void StartNetwork() override
-    {
-
-        // User can press BOOT button while starting to enter WiFi configuration mode
-        if (wifi_config_mode_)
-        {
-            EnterWifiConfigMode();
-            return;
-        }
-
-        // If no WiFi SSID is configured, enter WiFi configuration mode
-        auto &ssid_manager = SsidManager::GetInstance();
-        auto ssid_list = ssid_manager.GetSsidList();
-        if (ssid_list.empty())
-        {
-            wifi_config_mode_ = true;
-            EnterWifiConfigMode();
-            return;
-        }
-
-        auto &wifi_station = WifiStation::GetInstance();
-        wifi_station.OnScanBegin([this]()
-                                 {
-        auto display = Board::GetInstance().GetDisplay();
-        display->ShowNotification(Lang::Strings::SCANNING_WIFI, 30000); });
-        wifi_station.OnConnect([this](const std::string &ssid)
-                               {
-        auto& application = Application::GetInstance();
-        //application.PlaySound(Lang::Sounds::P3_CONNECTED);
-
-        auto display = Board::GetInstance().GetDisplay();
-        std::string notification = Lang::Strings::CONNECT_TO;
-        notification += ssid;
-        notification += "...";
-        display->ShowNotification(notification.c_str(), 30000); });
-        wifi_station.OnConnected([this](const std::string &ssid)
-                                 {
-                                     auto display = Board::GetInstance().GetDisplay();
-                                     std::string notification = Lang::Strings::CONNECTED_TO;
-                                     notification += ssid;
-                                     display->ShowNotification(notification.c_str(), 30000); });
-        wifi_station.Start();
-
-        // Try to connect to WiFi, if failed, launch the WiFi configuration AP
-        if (!wifi_station.WaitForConnected(60 * 1000))
-        {
-            wifi_station.Stop();
-            wifi_config_mode_ = true;
-            EnterWifiConfigMode();
-            return;
-        }
-    }
-
 public:
     CompactWifiBoardLCD() : boot_button_(BOOT_BUTTON_GPIO), audio_codec(CODEC_RX_GPIO, CODEC_TX_GPIO)
     {
@@ -280,7 +224,7 @@ public:
                 }
             // 如果唤醒词为"开始配网"，则重置WiFi配置
             }else if (command == "开始配网"){
-                ResetWifiConfiguration();
+                EnterWifiConfigMode();
             } });
         audio_codec.SetOutputVolume(80);
     }

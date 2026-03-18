@@ -8,6 +8,7 @@
 #include <esp_partition.h>
 #include <esp_app_desc.h>
 #include <esp_ota_ops.h>
+#include <esp_pm.h>
 #if CONFIG_IDF_TARGET_ESP32P4
 #include "esp_wifi_remote.h"
 #endif
@@ -166,4 +167,8 @@ std::string SystemInfo::PrintHeapStats() {
     result = "free sram: " + std::to_string(free_sram) + " minimal sram: " + std::to_string(min_free_sram) + " free_psram: " + std::to_string(free_psram) + " min_free_psram: " + std::to_string(min_free_psram);
     return result;
     // ESP_LOGI(TAG, "free sram: %u minimal sram: %u free_psram: %u min_free_psram: %u", free_sram, min_free_sram, free_psram, min_free_psram);
+}
+
+void SystemInfo::PrintPmLocks() {
+    esp_pm_dump_locks(stdout);
 }

@@ -40,24 +40,36 @@ protected:
     std::unique_ptr<LvglImage> preview_image_cached_ = nullptr;
     bool hide_subtitle_ = false;  // Control whether to hide chat messages/subtitles
 
+    // Music info overlay
+    lv_obj_t* music_info_panel_ = nullptr;
+    lv_obj_t* music_name_label_ = nullptr;
+    lv_obj_t* music_meta_label_ = nullptr;
+    lv_obj_t* music_progress_bar_ = nullptr;
+    lv_obj_t* music_time_label_ = nullptr;
+
     void InitializeLcdThemes();
-    void SetupUI();
+    void SetupMusicInfoPanel();
+    void UpdateMusicInfo();
     virtual bool Lock(int timeout_ms = 0) override;
     virtual void Unlock() override;
 
 protected:
     // Add protected constructor
     LcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_handle_t panel, int width, int height);
-    
+
 public:
     ~LcdDisplay();
     virtual void SetEmotion(const char* emotion) override;
-    virtual void SetChatMessage(const char* role, const char* content) override; 
+    virtual void SetChatMessage(const char* role, const char* content) override;
+    virtual void ClearChatMessages() override;
     virtual void SetPreviewImage(std::unique_ptr<LvglImage> image) override;
-
+    virtual void SetupUI() override;
     // Add theme switching function
     virtual void SetTheme(Theme* theme) override;
-    
+
+    // Override to also update music info panel
+    virtual void UpdateStatusBar(bool update_all = false) override;
+
     // Set whether to hide chat messages/subtitles
     void SetHideSubtitle(bool hide);
 };
@@ -69,18 +81,18 @@ public:
                   int width, int height, int offset_x, int offset_y,
                   bool mirror_x, bool mirror_y, bool swap_xy);
 #if defined(CONFIG_ENABLE_ANIM_EMOJI)
-    // ÖØÐ´±íÇéÉèÖÃ·½·¨
+    // ï¿½ï¿½Ð´ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ã·ï¿½ï¿½ï¿½
     virtual void SetEmotion(const char* emotion) override;
     virtual void SetEmotionForce(const char* emotion, bool force = false) override;
 
-    // ÖØÐ´ÁÄÌìÏûÏ¢ÉèÖÃ·½·¨
+    // ï¿½ï¿½Ð´ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ï¢ï¿½ï¿½ï¿½Ã·ï¿½ï¿½ï¿½
     virtual void SetChatMessage(const char* role, const char* content) override;
 private:
     void SetupGifContainer();
     void SetMessage(const char* role, const char* content);
 
-    GifPlayer* gif_player_ = nullptr;   ///< GIF²¥·ÅÆ÷ÊµÀý
-    bool force_emotion_ = false;        ///< ÊÇ·ñÇ¿ÖÆÏÔÊ¾±íÇé
+    GifPlayer* gif_player_ = nullptr;   ///< GIFï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Êµï¿½ï¿½
+    bool force_emotion_ = false;        ///< ï¿½Ç·ï¿½Ç¿ï¿½ï¿½ï¿½ï¿½Ê¾ï¿½ï¿½ï¿½ï¿½
 #endif
 };
 

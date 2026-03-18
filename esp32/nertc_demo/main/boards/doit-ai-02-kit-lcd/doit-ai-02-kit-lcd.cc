@@ -6,13 +6,10 @@
 #include "button.h"
 #include "config.h"
 
-#include <wifi_station.h>
 #include <esp_log.h>
 #include <esp_lcd_panel_vendor.h>
 #include <driver/spi_common.h>
 
-#include <wifi_station.h>
-#include <wifi_configuration_ap.h>
 #include <ssid_manager.h>
 
 #include "font_awesome.h"
@@ -43,7 +40,7 @@ private:
         });
         boot_button_.OnMultipleClick([this]()
         {
-            ResetWifiConfiguration();
+            EnterWifiConfigMode();
         });
 
         volume_up_button_.OnClick([this]() {
@@ -138,7 +135,7 @@ public:
                     Application::GetInstance().WakeWordInvoke("你好小智");
                 }
             }else if (command == "开始配网"){
-                ResetWifiConfiguration();
+                EnterWifiConfigMode();
             }
         });
     }

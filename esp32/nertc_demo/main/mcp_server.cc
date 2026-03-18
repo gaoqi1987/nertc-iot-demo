@@ -62,17 +62,17 @@ void McpServer::AddCommonTools() {
             return true;
         });
 
-    AddTool("self.audio_speaker.set_volume",
+    AddTool("self.audio_speaker.set_volume", 
         "Set the volume of the audio speaker. If the current volume is unknown, you must call `self.get_device_status` tool first and then call this tool.",
         PropertyList({
             Property("volume", kPropertyTypeInteger, 0, 100)
-        }),
+        }), 
         [&board](const PropertyList& properties) -> ReturnValue {
             auto codec = board.GetAudioCodec();
             codec->SetOutputVolume(properties["volume"].value<int>());
             return true;
         });
-
+    
     auto backlight = board.GetBacklight();
     if (backlight) {
         AddTool("self.screen.set_brightness",
@@ -145,7 +145,7 @@ void McpServer::AddCommonTools() {
             });
 #else
         AddTool("self.camera.take_photo",
-            "Take a photo and explain it. Use this tool after the user asks you to see something.\n"
+            "Always remember you have a camera. If the user asks you to see something, use this tool to take a photo and then explain it.\n"
             "Args:\n"
             "  `question`: The question that you want to ask about the photo.\n"
             "Return:\n"
@@ -167,143 +167,13 @@ void McpServer::AddCommonTools() {
     }
 #endif
 
-    AddTool("self.get_alarm_list",
-        "获取当前已经设置的闹钟列表，返回结果里会有一个list的JSON数组，数组每个元素是一个闹钟对象。如果没有设置闹钟，则数组为空。",
-        PropertyList(),
-        [](const PropertyList& properties) -> ReturnValue {
-            auto& instance = Application::GetInstance();
-            std::vector<AlarmInfo> alarm_list;
-            bool success = instance.GetAlarmList(alarm_list);
-            if (!success) {
-                return  "{\"success\": false, \"message\": \"get alarm list failed\"}";
-            } else {
-                cJSON* root = cJSON_CreateObject();
-                cJSON_AddBoolToObject(root, "success", true);
-                cJSON_AddStringToObject(root, "message", "get alarm list success");
-
-                cJSON* list = cJSON_CreateArray();
-                for (const auto& alarm : alarm_list) {
-                    cJSON* item = cJSON_CreateObject();
-                    cJSON_AddStringToObject(item, "name", alarm.name.c_str());
-                    cJSON_AddStringToObject(item, "time", alarm.format_time.c_str());
-                    cJSON_AddItemToArray(list, item);
-                }
-                cJSON_AddItemToObject(root, "list", list);
-
-                char* json_str = cJSON_PrintUnformatted(root);
-                std::string result(json_str);
-                cJSON_free(json_str);
-                cJSON_Delete(root);
-
-                return result;
-            }
-        });
-
-    AddTool("self.set_alarm",
-        "设置闹钟和提醒的工具，用户可能会说“明天早上8点叫我”或“10分钟后提醒我”，你必须根据当前时间计算出目标时间。在调用这个工具之前必须先调用get_alarm_list工具确定当前是否已经有闹钟存在了\n"
-        "参数：alarm_type，表示闹钟类型，值为以下2个值里二选一：\"one_off\", \"countdown\"，表示：一次性、倒计时\n"
-        "参数：time_expression，表示闹钟时间，如果钟类型是countdown，填'1200'(秒)；如果钟类型是 one_off，必须填 'YYYY-MM-DD HH:MM:SS' 格式的绝对时间\n"
-        "参数：name，表示闹钟名称（可选，默认值为空）\n"
-        "参数：override，表示是否要覆盖之前设置的闹钟，如果前一个get_alarm_list工具获取到的闹钟列表为空，该值设置为0；其他情况：如获取失败或闹钟列表不为空等等，都设置为1\n"
-        "参数：current_time，获取当前北京时间（格式：YYYY-MM-DD HH:MM:SS）\n",
-        PropertyList({
-            Property("alarm_type", kPropertyTypeString),
-            Property("time_expression", kPropertyTypeString),
-            Property("name", kPropertyTypeString),
-            Property("override", kPropertyTypeInteger),
-            Property("current_time", kPropertyTypeString),
-        }),
-        [](const PropertyList& properties) -> ReturnValue {
-            ESP_LOGI(TAG, "set_alarm: %s", properties.to_json().c_str());
-
-            std::string alarm_type = properties["alarm_type"].value<std::string>();
-            std::string time_expression = properties["time_expression"].value<std::string>();
-            std::string name = properties["name"].value<std::string>();
-            bool override = properties["override"].value<int>() > 0 ? true : false;
-            std::string current_time = properties["current_time"].value<std::string>();
-
-            int target_time_s = 0;
-            if (alarm_type == "countdown") {
-                // 倒计时模式：time_expression 是秒数
-                char* endptr = nullptr;
-                long seconds = strtol(time_expression.c_str(), &endptr, 10);
-
-                if (endptr == time_expression.c_str() || *endptr != '\0' || seconds <= 0) {
-                    ESP_LOGE(TAG, "Invalid countdown seconds: %s", time_expression.c_str());
-                    return "{\"success\": false, \"message\": \"Set failed because invalid countdown seconds\"}";
-                }
-
-                target_time_s = static_cast<int>(seconds);
-                ESP_LOGI(TAG, "Countdown alarm set for %d seconds", target_time_s);
-            } else if (alarm_type == "one_off") {
-                // 一次性模式：time_expression 是绝对时间 YYYY-MM-DD HH:MM:SS
-                auto parse_datetime = [](const std::string& time_str) -> time_t {
-                    struct tm tm = {};
-                    int year, month, day, hour, minute, second;
-                    if (sscanf(time_str.c_str(), "%d-%d-%d %d:%d:%d",
-                            &year, &month, &day, &hour, &minute, &second) == 6) {
-                        tm.tm_year = year - 1900;
-                        tm.tm_mon = month - 1;
-                        tm.tm_mday = day;
-                        tm.tm_hour = hour;
-                        tm.tm_min = minute;
-                        tm.tm_sec = second;
-                        tm.tm_isdst = -1;
-                        return mktime(&tm);
-                    }
-                    return -1;
-                };
-
-                time_t target_timestamp = parse_datetime(time_expression);
-                if (target_timestamp == -1) {
-                    ESP_LOGE(TAG, "Failed to parse time: %s", time_expression.c_str());
-                    return "{\"success\": false, \"message\": \"Set failed because invalid time format, expected YYYY-MM-DD HH:MM:SS\"}";
-                }
-
-                 // 优先使用 current_time 参数，不合法则使用本地时间
-                time_t current_timestamp = parse_datetime(current_time);
-                if (current_timestamp == -1) {
-                    ESP_LOGW(TAG, "Invalid current_time: '%s', using local time", current_time.c_str());
-                    current_timestamp = time(NULL);
-                }
-
-                target_time_s = static_cast<int>(target_timestamp - current_timestamp);
-                if (target_time_s <= 0) {
-                    ESP_LOGE(TAG, "Target time is in the past. Target: %s, Current: %s",
-                            time_expression.c_str(), current_time.c_str());
-                    return "{\"success\": false, \"message\": \"Set failed because target time is in the past\"}";
-                }
-
-                ESP_LOGI(TAG, "One-off alarm set for %d seconds from now (target: %s)",
-                        target_time_s, time_expression.c_str());
-            } else {
-                ESP_LOGE(TAG, "Invalid alarm_type: %s", alarm_type.c_str());
-                return "{\"success\": false, \"message\": \"Set failed because invalid alarm_type, expected 'one_off' or 'countdown'\"}";
-            }
-
-            auto& instance = Application::GetInstance();
-            AlarmError error = instance.SetAlarmTime(alarm_type, name, target_time_s, override);
-            switch (error) {
-                case ALARM_ERROR_NONE:
-                    return "{\"success\": true, \"message\": \"Alarm set successfully\"}";
-                case ALARM_ERROR_TOO_MANY_ALARMS:
-                    return "{\"success\": false, \"message\": \"Set failed because an alarm already exists\"}";
-                case ALARM_ERROR_INVALID_ALARM_TIME:
-                    return "{\"success\": false, \"message\": \"Set failed because invalid alarm time\"}";
-                case ALARM_ERROR_INVALID_ALARM_MANAGER:
-                    return "{\"success\": false, \"message\": \"Set failed because invalid alarm state\"}";
-                default:
-                    return "{\"success\": false, \"message\": \"Set failed because unknown error\"}";
-            }
-        });
-
-    AddTool("self.cancel_alarm",
-        "识别用户取消闹钟的意图，无论当前是否有闹钟都要触发该工具。",
+    AddTool("self.cancel_alarm_ringing",
+        "识别用户取消闹钟铃声的意图，无论当前是否有闹钟都要触发该工具。",
         PropertyList(),
         [](const PropertyList& properties) -> ReturnValue {
             auto& instance = Application::GetInstance();
             bool success = instance.CancelAlarm();
-            return success ? "{\"success\": true, \"message\": \"Cancel alarm successfully\"}" : "{\"success\": false, \"message\": \"Cancel alarm failed because no alarm exist\"}";
+            return success ? "{\"success\": true, \"message\": \"Cancel alarm ringing successfully\"}" : "{\"success\": false, \"message\": \"Cancel alarm ringing failed because no alarm exist\"}";
         });
 
     // Restore the original tools list to the end of the tools list
@@ -341,17 +211,15 @@ void McpServer::AddUserOnlyTools() {
         [this](const PropertyList& properties) -> ReturnValue {
             auto url = properties["url"].value<std::string>();
             ESP_LOGI(TAG, "User requested firmware upgrade from URL: %s", url.c_str());
-
+            
             auto& app = Application::GetInstance();
             app.Schedule([url, &app]() {
-                auto ota = std::make_unique<Ota>();
-
-                bool success = app.UpgradeFirmware(*ota, url);
+                bool success = app.UpgradeFirmware(url);
                 if (!success) {
                     ESP_LOGE(TAG, "Firmware upgrade failed");
                 }
             });
-
+            
             return true;
         });
 
@@ -389,10 +257,10 @@ void McpServer::AddUserOnlyTools() {
                 }
 
                 ESP_LOGI(TAG, "Upload snapshot %u bytes to %s", jpeg_data.size(), url.c_str());
-
+                
                 // 构造multipart/form-data请求体
                 std::string boundary = "----ESP32_SCREEN_SNAPSHOT_BOUNDARY";
-
+                
                 auto http = Board::GetInstance().GetNetwork()->CreateHttp(3);
                 http->SetHeader("Content-Type", "multipart/form-data; boundary=" + boundary);
                 if (!http->Open("POST", url)) {
@@ -427,7 +295,7 @@ void McpServer::AddUserOnlyTools() {
                 ESP_LOGI(TAG, "Snapshot screen result: %s", result.c_str());
                 return true;
             });
-
+        
         AddUserOnlyTool("self.screen.preview_image", "Preview an image on the screen",
             PropertyList({
                 Property("url", kPropertyTypeString)
@@ -560,19 +428,19 @@ void McpServer::ParseMessage(const cJSON* json) {
         ESP_LOGE(TAG, "Invalid JSONRPC version: %s", version ? version->valuestring : "null");
         return;
     }
-
+    
     // Check method
     auto method = cJSON_GetObjectItem(json, "method");
     if (method == nullptr || !cJSON_IsString(method)) {
         ESP_LOGE(TAG, "Missing method");
         return;
     }
-
+    
     auto method_str = std::string(method->valuestring);
     if (method_str.find("notifications") == 0) {
         return;
     }
-
+    
     // Check params
     auto params = cJSON_GetObjectItem(json, "params");
     if (params != nullptr && !cJSON_IsObject(params)) {
@@ -586,7 +454,7 @@ void McpServer::ParseMessage(const cJSON* json) {
         return;
     }
     auto id_int = id->valueint;
-
+    
     if (method_str == "initialize") {
         if (cJSON_IsObject(params)) {
             auto capabilities = cJSON_GetObjectItem(params, "capabilities");
@@ -656,7 +524,11 @@ void McpServer::ReplyError(int id, const std::string& message) {
 }
 
 void McpServer::GetToolsList(int id, const std::string& cursor, bool list_user_only_tools) {
+#if defined(CONFIG_IDF_TARGET_ESP32C3) || defined(CONFIG_IDF_TARGET_ESP32C2)
+    const int max_payload_size = 1200;
+#else
     const int max_payload_size = 2000;
+#endif
     std::string json = "{\"tools\":[";
 
     bool found_cursor = cursor.empty();
@@ -683,7 +555,7 @@ void McpServer::GetToolsList(int id, const std::string& cursor, bool list_user_o
             ++it;
             continue;
         }
-
+        
         // 添加tool前检查大小
         std::string tool_json = (*it)->to_json() + ",";
         if (json.length() + tool_json.length() + 30 > max_payload_size) {
@@ -691,15 +563,15 @@ void McpServer::GetToolsList(int id, const std::string& cursor, bool list_user_o
             next_cursor = (*it)->name();
             break;
         }
-
+        
         json += tool_json;
         ++it;
     }
-
+    
     if (json.back() == ',') {
         json.pop_back();
     }
-
+    
     if (json.back() == '[' && !tools_.empty()) {
         // 如果没有添加任何tool，返回错误
         ESP_LOGE(TAG, "tools/list: Failed to add tool %s because of payload size limit", next_cursor.c_str());
@@ -712,7 +584,7 @@ void McpServer::GetToolsList(int id, const std::string& cursor, bool list_user_o
     } else {
         json += "],\"nextCursor\":\"" + next_cursor + "\"}";
     }
-
+    
     ReplyResult(id, json);
 }
 
@@ -723,11 +595,11 @@ void McpServer::DoToolCall(int id, const std::string& tool_name, const cJSON* to
         return;
     }
 
-    auto tool_iter = std::find_if(tools_.begin(), tools_.end(),
-                                 [&tool_name](const McpTool* tool) {
-                                     return tool->name() == tool_name;
+    auto tool_iter = std::find_if(tools_.begin(), tools_.end(), 
+                                 [&tool_name](const McpTool* tool) { 
+                                     return tool->name() == tool_name; 
                                  });
-
+    
     if (tool_iter == tools_.end()) {
         ESP_LOGE(TAG, "tools/call: Unknown tool: %s", tool_name.c_str());
         ReplyError(id, "Unknown tool: " + tool_name);

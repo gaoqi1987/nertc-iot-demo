@@ -12,16 +12,18 @@
 #include <freertos/event_groups.h>
 #include <esp_timer.h>
 #include <model_path.h>
-
-#include <opus_encoder.h>
-#include <opus_decoder.h>
-#include <opus_resampler.h>
+#include "esp_audio_enc.h"
+#include "esp_opus_enc.h"
+#include "esp_opus_dec.h"
+#include "esp_ae_rate_cvt.h"
+#include "esp_audio_types.h"
 
 #include "audio_codec.h"
 #include "audio_processor.h"
 #include "processors/audio_debugger.h"
 #include "wake_word.h"
 #include "protocol.h"
+#include "ogg_demuxer.h"
 
 /*
  * There are two types of audio data flow:
@@ -33,6 +35,8 @@
  * Decode Queue and Send Queue are the main queues, because Opus packets are quite smaller than PCM packets.
  * 
  */
+
+#define OPUS_FRAME_DURATION_MS 60
 
 #define MAX_ENCODE_TASKS_IN_QUEUE 2
 #if defined(CONFIG_BOARD_TYPE_DOIT_AI_SPEAKER)
@@ -48,11 +52,35 @@
 #define AUDIO_POWER_TIMEOUT_MS 15000
 #define AUDIO_POWER_CHECK_INTERVAL_MS 1000
 
-
 #define AS_EVENT_AUDIO_TESTING_RUNNING      (1 << 0)
 #define AS_EVENT_WAKE_WORD_RUNNING          (1 << 1)
 #define AS_EVENT_AUDIO_PROCESSOR_RUNNING    (1 << 2)
 #define AS_EVENT_PLAYBACK_NOT_EMPTY         (1 << 3)
+
+#define AS_OPUS_GET_FRAME_DRU_ENUM(duration_ms)                   \
+    ((duration_ms) == 5 ? ESP_OPUS_ENC_FRAME_DURATION_5_MS :      \
+     (duration_ms) == 10 ? ESP_OPUS_ENC_FRAME_DURATION_10_MS :    \
+     (duration_ms) == 20 ? ESP_OPUS_ENC_FRAME_DURATION_20_MS :    \
+     (duration_ms) == 40 ? ESP_OPUS_ENC_FRAME_DURATION_40_MS :    \
+     (duration_ms) == 60 ? ESP_OPUS_ENC_FRAME_DURATION_60_MS :    \
+     (duration_ms) == 80 ? ESP_OPUS_ENC_FRAME_DURATION_80_MS :    \
+     (duration_ms) == 100 ? ESP_OPUS_ENC_FRAME_DURATION_100_MS :  \
+     (duration_ms) == 120 ? ESP_OPUS_ENC_FRAME_DURATION_120_MS : -1)
+#ifndef ESP_OPUS_BITRATE_AUTO
+#define ESP_OPUS_BITRATE_AUTO 0
+#endif
+#define AS_OPUS_ENC_CONFIG() {                                                                                    \
+        .sample_rate        = ESP_AUDIO_SAMPLE_RATE_16K,                                                          \
+        .channel            = ESP_AUDIO_MONO,                                                                     \
+        .bits_per_sample    = ESP_AUDIO_BIT16,                                                                    \
+        .bitrate            = ESP_OPUS_BITRATE_AUTO,                                                              \
+        .frame_duration     = (esp_opus_enc_frame_duration_t)AS_OPUS_GET_FRAME_DRU_ENUM(OPUS_FRAME_DURATION_MS),  \
+        .application_mode   = ESP_OPUS_ENC_APPLICATION_AUDIO,                                                     \
+        .complexity         = 0,                                                                                  \
+        .enable_fec         = false,                                                                              \
+        .enable_dtx         = true,                                                                               \
+        .enable_vbr         = true,                                                                               \
+    }
 
 struct AudioServiceCallbacks {
     std::function<void(void)> on_send_queue_available;
@@ -95,6 +123,7 @@ public:
     const std::string& GetLastWakeWord() const;
     bool IsVoiceDetected() const { return voice_detected_; }
     bool IsIdle();
+    void WaitForPlaybackQueueEmpty();
     bool IsWakeWordRunning() const { return xEventGroupGetBits(event_group_) & AS_EVENT_WAKE_WORD_RUNNING; }
     bool IsAudioProcessorRunning() const { return xEventGroupGetBits(event_group_) & AS_EVENT_AUDIO_PROCESSOR_RUNNING; }
     bool IsAfeWakeWord();
@@ -127,14 +156,22 @@ private:
     std::unique_ptr<AudioProcessor> audio_processor_;
     std::unique_ptr<WakeWord> wake_word_;
     std::unique_ptr<AudioDebugger> audio_debugger_;
-    std::unique_ptr<OpusEncoderWrapper> opus_encoder_;
-    std::unique_ptr<OpusDecoderWrapper> opus_decoder_;
-#ifdef CONFIG_USE_AUDIO_CODEC_ENCODE_OPUS
-    std::unique_ptr<OpusDecoderWrapper> opus_decoder2_;
-#endif
-    OpusResampler input_resampler_;
-    OpusResampler reference_resampler_;
-    OpusResampler output_resampler_;
+    void* opus_encoder_ = nullptr;
+    void* opus_decoder_ = nullptr;
+    void* opus_decoder2_ = nullptr;
+    std::mutex decoder_mutex_;
+    std::mutex input_resampler_mutex_;
+    esp_ae_rate_cvt_handle_t input_resampler_ = nullptr;
+    esp_ae_rate_cvt_handle_t output_resampler_ = nullptr;
+
+    // Encoder/Decoder state
+    int encoder_sample_rate_ = 16000;
+    int encoder_duration_ms_ = OPUS_FRAME_DURATION_MS;
+    int encoder_frame_size_ = 0;
+    int encoder_outbuf_size_ = 0;
+    int decoder_sample_rate_ = 0;
+    int decoder_duration_ms_ = OPUS_FRAME_DURATION_MS;
+    int decoder_frame_size_ = 0;
     DebugStatistics debug_statistics_;
     srmodel_list_t* models_list_ = nullptr;
 

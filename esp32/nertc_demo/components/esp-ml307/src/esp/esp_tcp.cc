@@ -60,6 +60,7 @@ bool EspTcp::Connect(const std::string& host, int port) {
 
     connected_ = true;
 
+    callback_called_ = false;
     xEventGroupClearBits(event_group_, ESP_TCP_EVENT_RECEIVE_TASK_EXIT);
     xTaskCreate([](void* arg) {
         EspTcp* tcp = (EspTcp*)arg;
@@ -71,12 +72,9 @@ bool EspTcp::Connect(const std::string& host, int port) {
 }
 
 void EspTcp::Disconnect() {
-    // 如果已经断开，直接返回
-    if (!connected_) {
-        return;
-    }
-
     // 主动断开，需要等待接收任务退出
+    // 不检查 connected_ 状态：即使 ReceiveTask 已将其设为 false，
+    // 仍需等待 ReceiveTask 完全退出（包括 callback 执行完毕），否则会 use-after-free
     DoDisconnect(true);
 }
 
@@ -86,20 +84,24 @@ void EspTcp::DoDisconnect(bool wait_for_task) {
     if (tcp_fd_ != -1) {
         close(tcp_fd_);
         tcp_fd_ = -1;
+    }
 
-        // 只有主动断开时才需要等待接收任务退出
-        // 被动断开时，当前就是接收任务，不需要等待
-        if (wait_for_task) {
-            auto bits = xEventGroupWaitBits(event_group_, ESP_TCP_EVENT_RECEIVE_TASK_EXIT, pdFALSE, pdFALSE, pdMS_TO_TICKS(10000));
-            if (!(bits & ESP_TCP_EVENT_RECEIVE_TASK_EXIT)) {
-                ESP_LOGE(TAG, "Failed to wait for receive task exit");
-            }
+    // 等待接收任务完全退出（包括 callback 执行完毕）
+    // 移到 tcp_fd_ 检查外部：即使 fd 已被 ReceiveTask 被动断开关闭，仍需等待任务退出
+    if (wait_for_task && receive_task_handle_ != nullptr) {
+        auto bits = xEventGroupWaitBits(event_group_, ESP_TCP_EVENT_RECEIVE_TASK_EXIT,
+                                        pdFALSE, pdFALSE, pdMS_TO_TICKS(10000));
+        if (!(bits & ESP_TCP_EVENT_RECEIVE_TASK_EXIT)) {
+            ESP_LOGE(TAG, "Failed to wait for receive task exit");
         }
     }
 
-    // 断开连接时触发断开回调
-    if (disconnect_callback_) {
-        disconnect_callback_();
+    // 断开连接时触发断开回调（保证只触发一次，防止主动+被动双重调用）
+    bool expected = false;
+    if (callback_called_.compare_exchange_strong(expected, true)) {
+        if (disconnect_callback_) {
+            disconnect_callback_();
+        }
     }
 }
 

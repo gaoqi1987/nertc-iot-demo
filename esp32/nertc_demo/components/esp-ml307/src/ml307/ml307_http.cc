@@ -63,7 +63,7 @@ Ml307Http::Ml307Http(std::shared_ptr<AtUart> at_uart) : at_uart_(at_uart) {
                     ESP_LOGE(TAG, "Unknown HTTP event: %s", type.c_str());
                 }
             }
-        } else if (command == "MHTTPCREATE") {
+        } else if (command == "MHTTPCREATE" && !closed_) {
             http_id_ = arguments[0].int_value;
             instance_active_ = true;
             xEventGroupSetBits(event_group_handle_, ML307_HTTP_EVENT_INITIALIZED);
@@ -339,6 +339,7 @@ int Ml307Http::GetLastError() {
 }
 
 void Ml307Http::Close() {
+    closed_ = true;
     if (!instance_active_) {
         return;
     }
@@ -349,6 +350,7 @@ void Ml307Http::Close() {
     eof_ = true;
     cv_.notify_all();
     ESP_LOGI(TAG, "HTTP connection closed, ID: %d", http_id_);
+    http_id_ = -1;
 }
 
 std::string Ml307Http::ErrorCodeToString(int error_code) {

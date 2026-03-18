@@ -45,6 +45,7 @@ private:
     std::condition_variable cv_;
 
     int http_id_ = -1;
+    bool closed_ = false;
     int status_code_ = -1;
     int error_code_ = -1;
     int timeout_ms_ = 30000;

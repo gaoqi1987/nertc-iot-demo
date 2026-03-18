@@ -28,6 +28,7 @@ static void example_event_callback(esp_blufi_cb_event_t event, esp_blufi_cb_para
 
 #define WIFI_CONNECTED_BIT BIT0
 #define WIFI_FAIL_BIT      BIT1
+#define BT_CONNECTED_BIT   BIT2
 // static EventGroupHandle_t g_blufi_ctx->wifi_result_group = NULL; 
 
 // static wifi_config_t g_blufi_ctx->sta_config;
@@ -56,6 +57,8 @@ const int CONNECTED_BIT = BIT0;
 // static char g_blufi_ctx->prefix[26] = {0};
 
 static blufi_context_t *g_blufi_ctx = NULL;
+
+extern blufi_custom_event_callback_t g_custom_event_callback;
 
 static void example_record_wifi_conn_info(int rssi, uint8_t reason)
 {
@@ -211,6 +214,7 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
         }
         break;
     case WIFI_EVENT_SCAN_DONE: {
+        BLUFI_INFO("recv scan wifi request\n");
         uint16_t apCount = 0;
         esp_wifi_scan_get_ap_num(&apCount);
         if (apCount == 0) {
@@ -279,9 +283,14 @@ static void clear_wifi_config_from_nvs(void)
 
 static void initialise_wifi(void)
 {
+    BLUFI_INFO("BLUFI_INFO: initialise wifi");
+    static bool wifi_initialized = false;
+    if (wifi_initialized)
+        return;
+
     ESP_ERROR_CHECK(esp_netif_init());
     g_blufi_ctx->wifi_event_group = xEventGroupCreate();
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
+    // ESP_ERROR_CHECK(esp_event_loop_create_default());
     esp_netif_t *sta_netif = esp_netif_create_default_wifi_sta();
     assert(sta_netif);
 
@@ -297,6 +306,7 @@ static void initialise_wifi(void)
     example_record_wifi_conn_info(EXAMPLE_INVALID_RSSI, EXAMPLE_INVALID_REASON);
     clear_wifi_config_from_nvs();
     ESP_ERROR_CHECK( esp_wifi_start() );
+    wifi_initialized = true;
 }
 
 static esp_blufi_callbacks_t example_callbacks = {
@@ -322,6 +332,7 @@ static void example_event_callback(esp_blufi_cb_event_t event, esp_blufi_cb_para
         break;
     case ESP_BLUFI_EVENT_BLE_CONNECT:
         BLUFI_INFO("BLUFI ble connect\n");
+        xEventGroupSetBits(g_blufi_ctx->wifi_result_group, BT_CONNECTED_BIT);
         g_blufi_ctx->ble_connected = true;
         esp_blufi_adv_stop();
         blufi_security_init();
@@ -439,6 +450,7 @@ static void example_event_callback(esp_blufi_cb_event_t event, esp_blufi_cb_para
         BLUFI_INFO("Recv SOFTAP CHANNEL %d\n", g_blufi_ctx->ap_config.ap.channel);
         break;
     case ESP_BLUFI_EVENT_GET_WIFI_LIST:{
+        BLUFI_INFO("recv wifi list request\n");
         wifi_scan_config_t scanConf = {
             .ssid = NULL,
             .bssid = NULL,
@@ -452,8 +464,43 @@ static void example_event_callback(esp_blufi_cb_event_t event, esp_blufi_cb_para
         break;
     }
     case ESP_BLUFI_EVENT_RECV_CUSTOM_DATA:
-        BLUFI_INFO("Recv Custom Data %" PRIu32 "\n", param->custom_data.data_len);
-        esp_log_buffer_hex("Custom Data", param->custom_data.data, param->custom_data.data_len);
+        BLUFI_INFO("Recv Custom Data:%.*s",
+                (int)param->custom_data.data_len,
+                param->custom_data.data);
+
+        esp_log_buffer_hex("Custom Data",
+                        param->custom_data.data,
+                        param->custom_data.data_len);
+
+        /*------ 子串包含判断 ------*/
+        /* 为了方便，先把数据包转成带 '\0' 的临时字符串 */
+        char tmp[64] = {0};                 /* 按需改大 */
+        size_t cpy_len = param->custom_data.data_len;
+        if (cpy_len >= sizeof(tmp)) cpy_len = sizeof(tmp) - 1;
+        memcpy(tmp, param->custom_data.data, cpy_len);
+        tmp[cpy_len] = '\0';
+
+        bool hit = false;
+        if (strstr(tmp, "ready")) {          /* 包含 "ready" */
+            BLUFI_INFO(">>> custom data contains 'ready' <<<  send device info");
+            vTaskDelay(pdMS_TO_TICKS(100));
+            esp_blufi_send_custom_data(g_blufi_ctx->device_info, g_blufi_ctx->device_info_len);
+            hit = true;
+            if (g_custom_event_callback)
+                g_custom_event_callback(BLUFI_CUSTOM_READY_EVENT, NULL, 0);
+        }
+        if (strstr(tmp, "start_4g")) {       /* 包含 "4g" */
+            BLUFI_INFO(">>> custom data contains '4g' <<<");
+            
+            if (g_custom_event_callback)
+                g_custom_event_callback(BLUFI_CUSTOM_4G_START_EVENT, NULL, 0);
+
+            hit = true;
+        }
+        if (!hit) {
+            BLUFI_ERROR("custom data does NOT contain 'ready' or '4g'");
+        }
+
         break;
 	case ESP_BLUFI_EVENT_RECV_USERNAME:
         /* Not handle currently */
@@ -478,7 +525,7 @@ static void example_event_callback(esp_blufi_cb_event_t event, esp_blufi_cb_para
     }
 }
 
-wifi_credential_t initialise_wifi_and_blufi(const char* prefix)
+wifi_credential_t initialise_wifi_and_blufi(const char* prefix, const char* device_info, size_t device_info_len)
 {
     wifi_credential_t wifi_cred = {
         .succ = 0,  // 失败标志
@@ -502,6 +549,14 @@ wifi_credential_t initialise_wifi_and_blufi(const char* prefix)
         g_blufi_ctx->prefix[0] = '\0'; 
     }
 
+    /* 2. 把外部传来的内容接在后面（最多别超缓冲区） */
+    if (device_info_len > 0) {
+        memcpy(g_blufi_ctx->device_info, device_info, device_info_len);
+        g_blufi_ctx->device_info_len = device_info_len;
+    } else {
+        g_blufi_ctx->device_info_len = device_info_len;
+    }
+
     esp_err_t ret;
     g_blufi_ctx->wifi_result_group = xEventGroupCreate();
     if (g_blufi_ctx->wifi_result_group == NULL) {
@@ -509,7 +564,7 @@ wifi_credential_t initialise_wifi_and_blufi(const char* prefix)
         return wifi_cred;
     }
 
-    initialise_wifi();
+    // initialise_wifi();
 
 #if CONFIG_BT_CONTROLLER_ENABLED || !CONFIG_BT_NIMBLE_ENABLED
     ret = esp_blufi_controller_init();
@@ -533,6 +588,125 @@ wifi_credential_t initialise_wifi_and_blufi(const char* prefix)
     int free_sram = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
     int min_free_sram = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL);
     BLUFI_INFO("blufi mode Free internal: %u minimal internal: %u", free_sram, min_free_sram);
+
+    while (1) {
+        EventBits_t bits = xEventGroupWaitBits(
+            g_blufi_ctx->wifi_result_group,                     
+            WIFI_CONNECTED_BIT | WIFI_FAIL_BIT | BT_CONNECTED_BIT,    
+            pdTRUE,                                
+            pdFALSE,                              
+            portMAX_DELAY     
+        );
+
+        if (bits & BT_CONNECTED_BIT) {
+            if (g_custom_event_callback)
+                g_custom_event_callback(BLUFI_CUSTOM_CONNECTED_EVENT, NULL, 0);
+            
+            vTaskDelay(pdMS_TO_TICKS(100));
+
+            initialise_wifi();
+
+            continue;
+        } else if (bits & WIFI_CONNECTED_BIT) {
+            BLUFI_INFO("Wi-Fi connected! SSID: %s", g_blufi_ctx->sta_config.sta.ssid);
+            wifi_cred.succ = 1;
+            strncpy(wifi_cred.ssid, (char*)g_blufi_ctx->sta_config.sta.ssid, sizeof(wifi_cred.ssid) - 1);
+            strncpy(wifi_cred.password, (char*)g_blufi_ctx->sta_config.sta.password, sizeof(wifi_cred.password) - 1);
+            
+            // 确保字符串终止
+            wifi_cred.ssid[sizeof(wifi_cred.ssid) - 1] = '\0';
+            wifi_cred.password[sizeof(wifi_cred.password) - 1] = '\0';
+
+            BLUFI_INFO("disconnect wifi");
+            esp_wifi_disconnect();
+
+            clear_wifi_config_from_nvs();
+            break;
+        } else if (bits & WIFI_FAIL_BIT) {
+            BLUFI_ERROR("Wi-Fi connection failed!");
+            wifi_cred.succ = 0;
+            break;
+        } else {
+            BLUFI_ERROR("Wi-Fi connection timeout!");
+            wifi_cred.succ = -1;
+            break;
+        }
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(1500));
+
+    return wifi_cred;
+}
+
+bool blufi_initialise_bt(const char* prefix, const char* device_info, size_t device_info_len) {
+    g_blufi_ctx = calloc(1, sizeof(blufi_context_t));
+    if (!g_blufi_ctx) {
+        return false;
+    }
+
+    char device_name[32] = "BLUFI_DEVICE_";  
+    if (prefix != NULL) {
+        strncpy(g_blufi_ctx->prefix, prefix, sizeof(g_blufi_ctx->prefix) - 1);  
+        g_blufi_ctx->prefix[sizeof(g_blufi_ctx->prefix) - 1] = '\0';  
+        strncat(device_name, prefix, sizeof(device_name) - strlen(device_name) - 1);
+        strncpy(g_blufi_ctx->device_name, device_name, sizeof(device_name));
+        g_blufi_ctx->device_name[sizeof(g_blufi_ctx->device_name) - 1] = '\0';  
+    } else {
+        g_blufi_ctx->prefix[0] = '\0'; 
+    }
+
+    /* 2. 把外部传来的内容接在后面（最多别超缓冲区） */
+    if (device_info_len > 0) {
+        memcpy(g_blufi_ctx->device_info, device_info, device_info_len);
+        g_blufi_ctx->device_info_len = device_info_len;
+    } else {
+        g_blufi_ctx->device_info_len = device_info_len;
+    }
+
+    esp_err_t ret;
+    g_blufi_ctx->wifi_result_group = xEventGroupCreate();
+    if (g_blufi_ctx->wifi_result_group == NULL) {
+        BLUFI_ERROR("Failed to create g_blufi_ctx->wifi_result_group!");
+        return false;
+    }
+
+#if CONFIG_BT_CONTROLLER_ENABLED || !CONFIG_BT_NIMBLE_ENABLED
+    ret = esp_blufi_controller_init();
+    if (ret) {
+        BLUFI_ERROR("%s BLUFI controller init failed: %s\n", __func__, esp_err_to_name(ret));
+        return false;
+    }
+
+#endif
+
+    ret = esp_blufi_host_and_cb_init(&example_callbacks);
+    if (ret != ESP_OK) {
+        BLUFI_ERROR("%s initialise failed: %s\n", __func__, esp_err_to_name(ret));
+        return false;
+    }
+
+    BLUFI_INFO("BLUFI VERSION %04x device_name:%s\n", esp_blufi_get_version(), g_blufi_ctx->device_name);
+    esp_ble_gap_set_device_name(g_blufi_ctx->device_name);
+
+    // Wait forever until reset after configuration
+    int free_sram = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    int min_free_sram = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL);
+    BLUFI_INFO("blufi mode Free internal: %u minimal internal: %u", free_sram, min_free_sram);
+
+    return true;
+}
+
+bool blufi_initialise_wifi() {
+    initialise_wifi();
+    return true;
+}
+
+wifi_credential_t blufi_start_process() {
+    wifi_credential_t wifi_cred = {
+        .succ = 0,  // 失败标志
+        .ssid = {0},
+        .password = {0}
+    };
 
     EventBits_t bits = xEventGroupWaitBits(
         g_blufi_ctx->wifi_result_group,                     
@@ -567,4 +741,18 @@ wifi_credential_t initialise_wifi_and_blufi(const char* prefix)
     vTaskDelay(pdMS_TO_TICKS(1500));
 
     return wifi_cred;
+}
+
+void uninitialise_blufi() {
+    static bool has_deinit = false;
+    if (has_deinit) 
+        return;
+
+    esp_blufi_adv_stop();
+
+    esp_blufi_host_deinit();
+
+    esp_blufi_controller_deinit();
+
+    has_deinit = true;
 }

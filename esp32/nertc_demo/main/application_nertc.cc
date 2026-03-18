@@ -8,7 +8,9 @@
 
 #include "assets/lang_config.h"
 
+#ifdef CONFIG_IDF_TARGET_ESP32S3
 #include <esp32_camera.h>
+#endif
 #include <mbedtls/base64.h>
 #include <esp_log.h>
 
@@ -127,7 +129,7 @@ void Application::DealTimerEvent() {
     }
 #endif
 
-    if (ai_sleep_ && (device_state_ == kDeviceStateIdle || device_state_ == kDeviceStateListening)) {
+    if (ai_sleep_ && (GetDeviceState() == kDeviceStateIdle || GetDeviceState() == kDeviceStateListening)) {
         Schedule([this]() {
             ESP_LOGI(TAG, "AI sleep mode, close the audio channel");
             if (protocol_) {
@@ -150,6 +152,7 @@ void Application::PhotoExplain(const std::string& request, const std::string& pr
                 protocol_->SendTTSText(pre_answer, 2, false);
             }
 
+#ifdef CONFIG_IDF_TARGET_ESP32S3
             Camera* camera = Board::GetInstance().GetCamera();
             if (camera) {
                 camera->Capture();
@@ -206,35 +209,48 @@ void Application::PhotoExplain(const std::string& request, const std::string& pr
                     ESP_LOGE(TAG, "Failed to get captured JPEG");
                 }
             }
+#endif
         });
     }
 }
 
 void Application::TouchActive(int value_head, int value_body) {
     // ESP_LOGI(TAG, "TouchActive value_head:%d, value_body:%d", value_head, value_body);
-    if (device_state_ != kDeviceStateIdle) {
+    if (GetDeviceState() != kDeviceStateIdle) {
         return;
     }
     static int last_value_head = value_head;
     static int last_value_body = value_body;
     static int header_count = 0;
     if (touch_count_ == 0) {
-        if (device_state_ == kDeviceStateListening) {
-            if (device_state_ == kDeviceStateListening) {
+        if (GetDeviceState() == kDeviceStateListening) {
+            if (GetDeviceState() == kDeviceStateListening) {
                 if (value_head > last_value_head * 1.1) {
+#ifdef CONFIG_BOARD_TYPE_DOIT_ESP32S3_EYE_6824_V2
+                    touch_count_ = 10;
+#else
                     touch_count_ = 50;
+#endif
                     protocol_->SendMcpMessage("正在抚摸你的头，请提供相关的情绪价值，回答");
                 } else if (value_body > last_value_body * 1.1) {
+#ifdef CONFIG_BOARD_TYPE_DOIT_ESP32S3_EYE_6824_V2
+                    touch_count_ = 10;
+#else
                     touch_count_ = 50;
+#endif
                     protocol_->SendMcpMessage("正在抚摸你的身体，请提供相关的情绪价值，回答");
                 }
             }
-        } else if (device_state_ == kDeviceStateIdle) {
+        } else if (GetDeviceState() == kDeviceStateIdle) {
             if (touch_active_) {
                 // ESP_LOGI(TAG, "TouchActive value_head:%.2f, value_body:%.2f", (float)value_head / (float)last_value_head, (float)value_body / (float)last_value_body);
                 if (value_head > last_value_head * 1.05) {
+#ifdef CONFIG_BOARD_TYPE_DOIT_ESP32S3_EYE_6824_V2
+                    touch_count_ = 8;
+#else
                     touch_count_ = 15;
-                    Board::GetInstance().SetPowerSaveMode(false);
+#endif
+                    Board::GetInstance().SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
                     Board::GetInstance().GetDisplay()->SetEmotion("happy");
                     Board::GetInstance().MotorStartKick(500);
                     Schedule([this]() {
@@ -242,8 +258,12 @@ void Application::TouchActive(int value_head, int value_body) {
                     });
                     TouchRestoreTimer(3000);
                 } else if (value_body > last_value_body * 1.05) {
+#ifdef CONFIG_BOARD_TYPE_DOIT_ESP32S3_EYE_6824_V2
+                    touch_count_ = 8;
+#else
                     touch_count_ = 15;
-                    Board::GetInstance().SetPowerSaveMode(false);
+#endif
+                    Board::GetInstance().SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
                     Board::GetInstance().GetDisplay()->SetEmotion("loving");
                     Board::GetInstance().MotorStartKick(500);
                     Schedule([this]() {
@@ -252,13 +272,17 @@ void Application::TouchActive(int value_head, int value_body) {
                     TouchRestoreTimer(3000);
                 }
             } else if (value_head > last_value_head * 1.05) {
+#ifdef CONFIG_BOARD_TYPE_DOIT_ESP32S3_EYE_6824_V2
+                touch_count_ = 20;
+#else
                 touch_count_ = 30;
+#endif
                 header_count = 1;
                 ESP_LOGW(TAG, "TouchActive tick header start!!!!");
             }
         }
     } else {
-        if (device_state_ == kDeviceStateIdle && !touch_active_) {
+        if (GetDeviceState() == kDeviceStateIdle && !touch_active_) {
             if (value_head > last_value_head * 1.05 && header_count > 0) {
                 header_count++;
                 ESP_LOGW(TAG, "TouchActive tick header %d", header_count);
@@ -268,7 +292,7 @@ void Application::TouchActive(int value_head, int value_body) {
                     touch_count_ = 20;
 
                     auto& board = Board::GetInstance();
-                    board.SetPowerSaveMode(false);
+                    board.SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
                     board.MotorStartKick(1500);
                     board.GetDisplay()->SetEmotion("neutral");
                     touch_active_ = true;
@@ -291,14 +315,14 @@ void Application::TouchActive(int value_head, int value_body) {
 
 void Application::Shake(float mag, float delta, bool is_strong) {
     ESP_LOGI(TAG,"Shake mag:%f, delta:%f, is_strong:%d", mag, delta, is_strong);
-    if (device_state_ != kDeviceStateIdle) {
+    if (GetDeviceState() != kDeviceStateIdle) {
         return;
     }
     if (!protocol_) {
         return;
     }
 
-    if (device_state_ == kDeviceStateIdle) {
+    if (GetDeviceState() == kDeviceStateIdle) {
         // if (is_strong) {
         //     ToggleChatState();
         //     Schedule([this]() {
@@ -325,7 +349,7 @@ void Application::Shake(float mag, float delta, bool is_strong) {
                 }
             }
             if (confused) {
-                Board::GetInstance().SetPowerSaveMode(false);
+                Board::GetInstance().SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
                 Board::GetInstance().GetDisplay()->SetEmotion("confused");
                 Board::GetInstance().MotorStartKick(1500);
                 Schedule([this]() {
@@ -335,10 +359,10 @@ void Application::Shake(float mag, float delta, bool is_strong) {
             }
         }
     }
-    if (device_state_ == kDeviceStateListening) {
+    if (GetDeviceState() == kDeviceStateListening) {
         if (is_strong) {
             protocol_->SendMcpMessage("你被剧烈摇晃。请以委屈/迷糊/激动等情绪表达。");
-        } else if (device_state_ == kDeviceStateListening) {
+        } else if (GetDeviceState() == kDeviceStateListening) {
             protocol_->SendMcpMessage("正在轻微摇晃你。请以平和、安抚的语气回应，如果连续2次以上以委屈/迷糊/激动等情绪表达。");
         }
     }
@@ -346,7 +370,7 @@ void Application::Shake(float mag, float delta, bool is_strong) {
 
 void Application::LiftUp() {
     ESP_LOGI(TAG, " LiftUp");
-    if (device_state_ == kDeviceStateListening) {
+    if (GetDeviceState() == kDeviceStateListening) {
         protocol_->SendMcpMessage("你被举高高。请以快乐、兴奋的语气回应。");
     }
 }
@@ -365,7 +389,7 @@ void Application::TouchRestoreTimerCb(TimerHandle_t xTimer) {
     }
 }
 void Application::TouchRestore() {
-    if (device_state_ == kDeviceStateIdle) {
+    if (GetDeviceState() == kDeviceStateIdle) {
         Board::GetInstance().GetDisplay()->SetEmotion("neutral");
     }
 }
@@ -394,52 +418,12 @@ void Application::StopRing() {
     GetAudioService().ResetDecoder();
 }
 
-AlarmError Application::SetAlarmTime(const std::string& type, const std::string& name, int target_time_s, bool override) {
-    ESP_LOGI(TAG, "SetAlarmTime: %s", name.c_str());
-    if (target_time_s <= 0) {
-        ESP_LOGW(TAG, "SetAlarmTime failed for target_time_s <= 0");
-        return ALARM_ERROR_INVALID_ALARM_TIME;
-    }
-    if (!alarm_manager_) {
-        ESP_LOGW(TAG, "SetAlarmTime failed for alarm_manager_ is null");
-        return ALARM_ERROR_INVALID_ALARM_MANAGER;
-    }
-    if (alarm_manager_->HasActiveAlarm() && !override) {
-        ESP_LOGW(TAG, "SetAlarmTime for alarm already exists");
-        return ALARM_ERROR_TOO_MANY_ALARMS;
-    }
-
-    Schedule([this, type, name, target_time_s, override]() {
-        if (!alarm_manager_) {
-            return;
-        }
-        auto error = alarm_manager_->SetAlarm(type, name, target_time_s, override);
-        if (error != ALARM_ERROR_NONE) {
-            ESP_LOGW(TAG, "SetAlarmTime failed for error:%d", (int)error);
-        }
-    });
-    return ALARM_ERROR_NONE;
-}
-
-bool Application::GetAlarmList(std::vector<AlarmInfo>& out_list) {
-    ESP_LOGI(TAG, "GetAlarmList");
-    if (!alarm_manager_) {
-        ESP_LOGE(TAG, "GetAlarmList failed: alarm_manager_ is null");
-        out_list.clear();
-        return false;
-    }
-    return alarm_manager_->GetAlarmList(out_list);
-}
-
 bool Application::CancelAlarm() {
     ESP_LOGI(TAG, "CancelAlarm");
-    if (!alarm_play_timer_handle_ && (!alarm_manager_ || !alarm_manager_->HasActiveAlarm())) {
+    if (!alarm_play_timer_handle_ && !alarm_manager_) {
         return false;
     }
     Schedule([this]() {
-        if (alarm_manager_) {
-            alarm_manager_->ClearAll();
-        }
         StopAlarmRinging();
     });
     return true;
@@ -558,7 +542,7 @@ void Application::TestDestroy() {
 }
 
 void Application::Close() {
-    if (device_state_ == kDeviceStateActivating) {
+    if (GetDeviceState() == kDeviceStateActivating) {
         SetDeviceState(kDeviceStateIdle);
         return;
     }

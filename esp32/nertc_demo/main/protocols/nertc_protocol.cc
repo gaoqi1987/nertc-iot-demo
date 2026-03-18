@@ -22,6 +22,7 @@
 #define UID 6669
 #define USE_SAFE_MODE 0
 #define JOIN_EVENT (1 << 0)
+#define START_AI_EVENT (1 << 1)
 
 #define NERTC_DEFAULT_TEST_LICENSE "eyJhbGdvcml0aG0iOiJkZWZhdWx0IiwiY3JlZGVudGlhbCI6eyJhY3RpdmF0ZURhdGUiOjE3NTkxMjAyMTQsImV4cGlyZURhdGUiOjE3OTMyNDgyMTQsImxpY2Vuc2VLZXkiOiJ5dW54aW5Db21tb25UZXN0Iiwibm9uY2UiOiJQLW85S3o5RTI2WSJ9LCJzaWduYXR1cmUiOiJFcUt4c2s5TTFNWGp2dWE5Z3J4MGVYVkxxdHBrMm5aWUoyMHNIM0x4LzVMT0tFL3BOTktadDdmNG04eVE5ZWFIQmxHS2NaYUdmaVlNeTdtZ1pYTjVLVFRvZzk2K2RYZmhuZ1N4UG9YUDZBUkNHdHlmZ1N1SDFtbGlxYUYyNWVrWVlRQzUwV3V5ZHFMRzJyaDB1cVhrR05oSkhtVWtRdnVndU1sVlZjc2JLelRCNGRubmtzVVhOcm12aEZXQS9IUTNqd0kyYmFaOTNlMzM4UkFjYTRlVHBTeUhkb1EzRlNGVkpxUXBWRHlJVXhOb21ORXhJT1Z2bzN5dkdRcERLTldjVUFFejFQN1R0Z3ozS1U4RnZYT09sRXNPTU5UYzRxdU9JSWp1SWNRaE1aK2FrSHlDRURHSE04TUthYkdTU2JZOXN1NWVwdjZEZUZxWjEza29wK1pHK2c9PSIsInZlcnNpb24iOiIxLjAifQ=="
 
@@ -381,6 +382,8 @@ bool NeRtcProtocol::OpenAudioChannel() {
         ESP_LOGI(TAG, "NeRtcProtocol OpenAudioChannel rtc p2p");
     }
 
+    xEventGroupWaitBits(event_group_, START_AI_EVENT, pdTRUE, pdFALSE, pdMS_TO_TICKS(2000)); //最长阻塞2秒
+
     if (on_audio_channel_opened_ != nullptr) {
         on_audio_channel_opened_();
     }
@@ -389,7 +392,7 @@ bool NeRtcProtocol::OpenAudioChannel() {
     return true;
 }
 
-void NeRtcProtocol::CloseAudioChannel() {
+void NeRtcProtocol::CloseAudioChannel(bool send_goodbye) {
     if (!engine_)
         return;
 
@@ -424,25 +427,11 @@ bool NeRtcProtocol::SendAudio(std::unique_ptr<AudioStreamPacket> packet) {
     if (!engine_ || !join_.load() || !packet)
         return false;
 
-    if(packet->pcm_payload.empty()) {
-        nertc_sdk_audio_encoded_frame_t encoded_frame;
-        encoded_frame.data = const_cast<unsigned char*>(packet->payload.data());
-        encoded_frame.length = packet->payload.size();
-        nertc_sdk_audio_config audio_config = {server_sample_rate_, 1, samples_per_channel_};
-        nertc_push_audio_encoded_frame(engine_, NERTC_SDK_MEDIA_MAIN_AUDIO, audio_config, 100, &encoded_frame);
-    } else {
-        if (packet->sample_rate != server_sample_rate_) {
-            ESP_LOGE(TAG, "SendAudio PCM sample rate mismatch: expected %d, got %d",
-                    server_sample_rate_, packet->sample_rate);
-            return false;
-        }
-
-        nertc_sdk_audio_frame_t audio_frame;
-        audio_frame.type = NERTC_SDK_AUDIO_PCM_16;
-        audio_frame.data = const_cast<int16_t*>(packet->pcm_payload.data());
-        audio_frame.length = packet->pcm_payload.size();
-        nertc_push_audio_frame(engine_, NERTC_SDK_MEDIA_MAIN_AUDIO, &audio_frame);
-    }
+    nertc_sdk_audio_encoded_frame_t encoded_frame;
+    encoded_frame.data = const_cast<unsigned char*>(packet->payload.data());
+    encoded_frame.length = packet->payload.size();
+    nertc_sdk_audio_config audio_config = {server_sample_rate_, 1, samples_per_channel_};
+    nertc_push_audio_encoded_frame(engine_, NERTC_SDK_MEDIA_MAIN_AUDIO, audio_config, 100, &encoded_frame);
 
     return true;
 }
@@ -461,12 +450,7 @@ void NeRtcProtocol::SendAecReferenceAudio(std::unique_ptr<AudioStreamPacket> pac
     encoded_frame.data = const_cast<unsigned char*>(packet->payload.data());
     encoded_frame.length = packet->payload.size();
     encoded_frame.encoded_timestamp = packet->timestamp;
-
-    nertc_sdk_audio_frame_t audio_frame;
-    audio_frame.type = NERTC_SDK_AUDIO_PCM_16;
-    audio_frame.data = const_cast<int16_t*>(packet->pcm_payload.data());
-    audio_frame.length = packet->pcm_payload.size();
-    nertc_push_audio_reference_frame(engine_, NERTC_SDK_MEDIA_MAIN_AUDIO, &encoded_frame, &audio_frame);
+    nertc_push_audio_reference_frame(engine_, NERTC_SDK_MEDIA_MAIN_AUDIO, &encoded_frame, nullptr);
 }
 
 void NeRtcProtocol::SendTTSText(const std::string& text, int interrupt_mode, bool add_context) {
@@ -772,6 +756,8 @@ void NeRtcProtocol::OnUserJoined(const nertc_sdk_callback_context_t* ctx, const 
     if (user && user->type == NERTC_SDK_USER_SIP) {
         Board::GetInstance().GetDisplay()->SetEmotionForce("call", true);
     }
+
+    xEventGroupSetBits(instance->event_group_, START_AI_EVENT);
 }
 
 void NeRtcProtocol::OnUserLeft(const nertc_sdk_callback_context_t* ctx, const nertc_sdk_user_info* user, int reason) {
@@ -969,6 +955,49 @@ void NeRtcProtocol::OnAiData(const nertc_sdk_callback_context_t* ctx, nertc_sdk_
         if (instance->on_incoming_json_) instance->on_incoming_json_(mcp_json);
         cJSON_Delete(mcp_json);
 
+    } else if (strncmp(type_str, "agentEvent", type_len) == 0) {
+        // 处理服务端 agentEvent 下发的闹钟等事件
+        cJSON* data_json = cJSON_Parse(data_str);
+        if (!data_json) {
+            ESP_LOGE(TAG, "Failed to parse JSON data");
+            return;
+        }
+        cJSON* agent_event_payload = cJSON_GetObjectItem(data_json, "agentEventPayload");
+        if (!agent_event_payload || !cJSON_IsObject(agent_event_payload)) {
+            ESP_LOGE(TAG, "agentEventPayload is null");
+            cJSON_Delete(data_json);
+            return;
+        }
+
+        cJSON* event = cJSON_GetObjectItem(agent_event_payload, "eventType");
+        if (!event || !cJSON_IsString(event)) {
+            ESP_LOGE(TAG, "eventType is null");
+            cJSON_Delete(data_json);
+            return;
+        }
+        std::string event_type = event->valuestring;
+        if (event_type == "alarm") {
+            cJSON* params = cJSON_GetObjectItem(agent_event_payload, "params");
+            if (!params || !cJSON_IsObject(params)) {
+                ESP_LOGE(TAG, "params is null");
+                cJSON_Delete(data_json);
+                return;
+            }
+            cJSON* alarms = cJSON_GetObjectItem(params, "alarms");
+            if (!alarms || !cJSON_IsArray(alarms)) {
+                ESP_LOGE(TAG, "alarms is null");
+                cJSON_Delete(data_json);
+                return;
+            }
+            cJSON* alarm_json = cJSON_CreateObject();
+            cJSON_AddStringToObject(alarm_json, "type", "alarm");
+            cJSON_AddItemToObject(alarm_json, "alarms", cJSON_Duplicate(alarms, 1));
+            if (instance->on_incoming_json_) instance->on_incoming_json_(alarm_json);
+            cJSON_Delete(alarm_json);
+            cJSON_Delete(data_json);
+            return;
+        }
+
     }else if(strncmp(type_str, "songSearch", type_len) == 0) {
         cJSON* data_json = cJSON_Parse(data_str);
         if (!data_json) {
@@ -999,7 +1028,6 @@ void NeRtcProtocol::OnAiData(const nertc_sdk_callback_context_t* ctx, nertc_sdk_
         cJSON_AddItemToObject(app_json, "payload", data_json);
         if (instance->on_incoming_json_) instance->on_incoming_json_(app_json);
         cJSON_Delete(app_json);
-        cJSON_Delete(data_json);
     }
 }
 
@@ -1019,7 +1047,6 @@ void NeRtcProtocol::OnAudioData(const nertc_sdk_callback_context_t* ctx, uint64_
         packet->frame_duration = instance->server_frame_duration_;
         packet->timestamp = encoded_frame->encoded_timestamp;
         packet->payload = std::move(payload_vector);
-        packet->muted = is_mute_packet;
 
         instance->on_incoming_audio_(std::move(packet));
     }

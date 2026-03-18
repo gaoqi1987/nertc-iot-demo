@@ -1,3 +1,10 @@
+# VB6824 component is not supported on ESP32-P4
+if(CONFIG_IDF_TARGET_ESP32P4)
+    # Register empty component for ESP32-P4 to avoid build errors
+    idf_component_register()
+    return()
+endif()
+
 set(incs )
 set(srcs )
 set(assets )

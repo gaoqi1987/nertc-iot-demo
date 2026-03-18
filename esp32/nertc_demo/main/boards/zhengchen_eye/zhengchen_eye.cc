@@ -7,10 +7,8 @@
 #include "config.h"
 #include "assets/lang_config.h"
 #include "font_awesome.h"
-#include "iot/thing_manager.h"
 
 #include <esp_lcd_panel_vendor.h>
-#include <wifi_station.h>
 #include <esp_log.h>
 #include <driver/i2c_master.h>
 #include <driver/spi_common.h>
@@ -451,6 +449,13 @@ private:
         }
     }
     void InitializeCodecI2c() {
+        // blufi分区将GPIO1/2用作ADC输入引脚。
+        // RTC_SW_CPU_RST软复位后，GPIO pad寄存器(IO_MUX)不会被清除，
+        // GPIO1/2仍处于ADC模拟模式(InputEn=0)，导致I2C无法正常工作。
+        // 调用gpio_reset_pin()恢复为数字模式，再初始化I2C。
+        gpio_reset_pin(AUDIO_CODEC_I2C_SDA_PIN);
+        gpio_reset_pin(AUDIO_CODEC_I2C_SCL_PIN);
+
         // Initialize I2C peripheral
         i2c_master_bus_config_t i2c_bus_cfg = {
             .i2c_port = I2C_NUM_0,
@@ -475,10 +480,10 @@ private:
             ESP_LOGW(TAG, "boot_button_.OnClick");
             auto& app = Application::GetInstance();
             if (GetNetworkType() == NetworkType::WIFI) {
-                if (app.GetDeviceState() == kDeviceStateStarting && !WifiStation::GetInstance().IsConnected()) {
+                if (app.GetDeviceState() == kDeviceStateStarting ) {
                     // cast to WifiBoard
                     auto& wifi_board = static_cast<WifiBoard&>(GetCurrentBoard());
-                    wifi_board.ResetWifiConfiguration();
+                    wifi_board.EnterWifiConfigMode();
                 }
             }
             app.ToggleChatState();
@@ -678,14 +683,11 @@ public:
     }
 
 #if !CONFIG_USE_NOLCD
-    virtual void SetPowerSaveMode(bool enabled) override {
-        if (power_manager_ && !enabled) {
+    virtual void SetPowerSaveLevel(PowerSaveLevel level) override {
+        if (level != PowerSaveLevel::LOW_POWER) {
             power_save_timer_->WakeUp();
-            power_save_timer_->SetEnabled(!power_manager_->IsCharging());
-        } else {
-            power_save_timer_->SetEnabled(enabled);
         }
-        DualNetworkBoard::SetPowerSaveMode(enabled);
+        GetCurrentBoard().SetPowerSaveLevel(level);
     }
 #endif
 };

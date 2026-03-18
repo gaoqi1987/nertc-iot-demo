@@ -7,7 +7,6 @@
 #include "mcp_server.h"
 #include "settings.h"
 
-#include <wifi_station.h>
 #include <esp_log.h>
 #include <esp_lcd_panel_vendor.h>
 #include <driver/i2c_master.h>
@@ -92,8 +91,9 @@ private:
                 ESP_LOGI(TAG, "only stop alarm ringing");
                 return;
             }
-            if (app.GetDeviceState() == kDeviceStateStarting && !WifiStation::GetInstance().IsConnected()) {
-                ResetWifiConfiguration();
+            if (app.GetDeviceState() == kDeviceStateStarting) {
+                EnterWifiConfigMode();
+                return;
             }
             app.ToggleChatState();
         });
@@ -238,7 +238,6 @@ private:
         esp_video_init_config_t video_config = {
             .dvp = &dvp_config,
         };
-
         camera_ = new Esp32Camera(video_config);
 
         Settings settings("sparkbot", false);

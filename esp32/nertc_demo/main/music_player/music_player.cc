@@ -143,7 +143,7 @@ int MusicPlayer::Initialize(AudioCodec* codec, AudioService* audio_service, std:
     if(codec_ == nullptr){
         codec_ = codec;
         audio_service_ = audio_service;
-        mp3_player_init(DataOutCb, InfoCb, PlayStateCb, this);
+        // mp3_player_init(DataOutCb, InfoCb, PlayStateCb, this);
         mp3_online_player_.Mp3OnlinePlayerInit(DataOutCb, InfoCb, PlayStateCb, this);
     }
     if(!sd_card_music_path.empty())
@@ -265,8 +265,21 @@ void MusicPlayer::Play(const char* mp3_path){
             vTaskDelete(NULL);
         }, "tmp_play", 2 * 1024, input, 8,  NULL); 
     } else {
-        mp3_player_play(mp3_path, false, this);
+        // mp3_player_play(mp3_path, false, this);
     }
+}
+
+MusicProgress MusicPlayer::GetProgress() {
+    MusicProgress progress = {0, 0};
+    if (!initialed) return progress;
+    if (is_air_music_playing_) {
+        progress.duration_ms = mp3_online_player_.GetDurationMs();
+        progress.position_ms = mp3_online_player_.GetPositionMs();
+    } else {
+        // progress.duration_ms = mp3_player_get_duration();
+        // progress.position_ms = mp3_player_get_position();
+    }
+    return progress;
 }
 
 void MusicPlayer::UpdateAirMusicListAndPlay(const std::vector<MusicInfo>& music_list, bool play_now){
@@ -281,5 +294,24 @@ void MusicPlayer::UpdateAirMusicListAndPlay(const std::vector<MusicInfo>& music_
             Application::GetInstance().Close();
         }
     }
-    music_list_manager_.CacheAirMusicList(music_list);
+    else{
+        music_list_manager_.CacheAirMusicList(music_list);
+
+    }
+}
+
+MusicPlayingInfo MusicPlayer::GetCurrentMusicPlayingInfo() {
+    MusicPlayingInfo info = {};
+    if (!initialed) return info;
+
+    MusicInfo music_info = music_list_manager_.GetCurrentAirMusic();
+    info.name   = music_info.name;
+    info.album  = music_info.album;
+    info.artist = music_info.artist;
+    info.uri    = music_info.uri;
+
+    info.duration_ms = mp3_online_player_.GetDurationMs();
+    info.position_ms = mp3_online_player_.GetPositionMs();
+
+    return info;
 }
