@@ -369,12 +369,23 @@ private:
                 
                 if (touch_duration >= touch_debounce_ms) {
                     ESP_LOGI(TAG, "触摸按键触发 (持续时间: %lu ms)", touch_duration * portTICK_PERIOD_MS);
-                    
+
                     auto& app = Application::GetInstance();
                     if (app.GetDeviceState() == kDeviceStateStarting) {
-                        board->EnterWifiConfigMode();
+                        // 通过主循环调度，避免与 WifiManager::Initialize()+TryWifiConnect() 的竞争：
+                        // ESP32-P4 的 SDIO 传输初始化需要约 2.7 秒，此期间若直接调用
+                        // EnterWifiConfigMode()，会导致 StartConfigAp 和 StartStation 并发，
+                        // WifiManager::StartStation() 在临时释放 mutex 触发 ConfigModeExit
+                        // 回调时发生再入，两次调用 esp_netif_create_default_wifi_sta 导致
+                        // "duplicate key" assert 崩溃。
+                        // Schedule() 的回调在 Application::Run() 主循环中执行，该循环在
+                        // Initialize()（含 TryWifiConnect()）完全返回后才启动，保证时序正确。
+                        app.Schedule([board]() {
+                            board->EnterWifiConfigMode();
+                        });
+                    } else {
+                        app.ToggleChatState();
                     }
-                    app.ToggleChatState();
                 }
                 
                 last_touch_state = false;
@@ -389,9 +400,11 @@ private:
 
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
+            ESP_LOGI(TAG, "boot_button_.OnClick");
             auto& app = Application::GetInstance();
             if (app.GetDeviceState() == kDeviceStateStarting) {
                 EnterWifiConfigMode();
+                return;
             }
             app.ToggleChatState(); });
     }
