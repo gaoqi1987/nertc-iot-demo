@@ -1,0 +1,19 @@
+esp32/nertc_demo/NERTC_Integration_Guide.md
+  s_e80398f35ec9ba::t_a5e2c1db82b52e 6,77,136-137,151-153,162,200,204-205,278-279,330,333,337-338,346-353,380,389-390,428,433,438-439,464-465,473,475,480-482,489-492,502,508,535-537,539,541,559-565,569,572,574,584-595,597,599,601,603-612,624,642,654,665,676,678,684,700,709,711,713,721,727,730,735-737,739
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.10",
+  "base_commit_sha": "f99c2150eeb5cfbdc1d51d7c013828bb9ffb277c",
+  "prompts": {},
+  "sessions": {
+    "s_e80398f35ec9ba": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019e44a3-07eb-7f32-be7c-64d817ed0c24",
+        "model": "gpt-5.5"
+      },
+      "human_author": "高琦 <hzgaoqi1@corp.netease.com>"
+    }
+  }
+}
