@@ -1,0 +1,23 @@
+esp32/nertc_demo/components/nertc_sdk/include/nertc_sdk_define.h
+  s_111c038ae5a66a::t_be562bc912d0de 31-32
+esp32/nertc_demo/main/protocols/nertc_protocol.cc
+  s_111c038ae5a66a::t_be562bc912d0de 174
+esp32/nertc_demo/NERTC_Integration_Guide.md
+  s_111c038ae5a66a::t_be562bc912d0de 197-202
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.11",
+  "base_commit_sha": "2fbf59aeb1e31766c11bab3b6822fe460b9a0f8a",
+  "prompts": {},
+  "sessions": {
+    "s_111c038ae5a66a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019e4971-0b5e-7b22-859a-06b25d463b86",
+        "model": "gpt-5.5"
+      },
+      "human_author": "高琦 <hzgaoqi1@corp.netease.com>"
+    }
+  }
+}
