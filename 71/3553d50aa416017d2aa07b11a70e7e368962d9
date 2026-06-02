@@ -1,0 +1,19 @@
+esp32/nertc_demo/CMakeLists.txt
+  s_f149dadc1368f7::t_83b7648e2b032f 5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "713553d50aa416017d2aa07b11a70e7e368962d9",
+  "prompts": {},
+  "sessions": {
+    "s_f149dadc1368f7": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019e831f-42cb-74c0-82c7-452da19123d2",
+        "model": "gpt-5.5"
+      },
+      "human_author": "高琦 <hzgaoqi1@corp.netease.com>"
+    }
+  }
+}
